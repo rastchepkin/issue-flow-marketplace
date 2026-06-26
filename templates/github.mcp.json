@@ -1,0 +1,12 @@
+{
+  "//": "Merge this `github` server into the target repo's .mcp.json. It is the ONLY MCP server the flow needs. Replace GITHUB_PAT_xxx with an env-var name holding a GitHub PAT (classic: scopes `repo` + `read:org`; fine-grained: Issues/PRs/Contents read-write). Do NOT inline the token — keep it in an env var.",
+  "mcpServers": {
+    "github": {
+      "type": "http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "headers": {
+        "Authorization": "Bearer ${GITHUB_PAT_xxx}"
+      }
+    }
+  }
+}

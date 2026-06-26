@@ -1,0 +1,82 @@
+name: Project status sync
+
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  move-issues:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+      PROJECT_ID: ${{ vars.PROJECT_ID }}
+      STATUS_FIELD_ID: ${{ vars.STATUS_FIELD_ID }}
+      OPTION_DEVELOP: ${{ vars.OPTION_DEVELOP }}
+      OPTION_PRODUCTION: ${{ vars.OPTION_PRODUCTION }}
+      PR_BODY: ${{ github.event.pull_request.body }}
+      BASE_REF: ${{ github.event.pull_request.base.ref }}
+      REPO_OWNER: ${{ github.event.repository.owner.login }}
+      REPO_NAME: ${{ github.event.repository.name }}
+    steps:
+      - name: Skip if project board not configured
+        if: vars.PROJECT_ID == '' || vars.STATUS_FIELD_ID == '' || vars.OPTION_DEVELOP == '' || vars.OPTION_PRODUCTION == ''
+        run: |
+          echo "PROJECT_ID/STATUS_FIELD_ID/OPTION_* repo variables are not set — project board automation is disabled."
+          echo "See docs/RUNBOOK.md → 'GitHub Project board automation' for setup."
+          exit 0
+
+      - name: Move linked issues to correct status
+        if: vars.PROJECT_ID != '' && vars.STATUS_FIELD_ID != '' && vars.OPTION_DEVELOP != '' && vars.OPTION_PRODUCTION != ''
+        run: |
+          set -euo pipefail
+
+          if [[ "$BASE_REF" == "develop" ]]; then
+            TARGET_OPTION="$OPTION_DEVELOP"
+          elif [[ "$BASE_REF" == "main" ]]; then
+            TARGET_OPTION="$OPTION_PRODUCTION"
+          else
+            echo "Base ref '$BASE_REF' is not develop/main, skipping."
+            exit 0
+          fi
+
+          ISSUE_NUMBERS=$(printf '%s\n' "$PR_BODY" \
+            | grep -oiE '(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+#[0-9]+' \
+            | grep -oE '#[0-9]+' \
+            | tr -d '#' \
+            | sort -u || true)
+
+          if [[ -z "$ISSUE_NUMBERS" ]]; then
+            echo "No linked issues found in PR body."
+            exit 0
+          fi
+
+          for NUM in $ISSUE_NUMBERS; do
+            echo "::group::Processing issue #$NUM"
+
+            ISSUE_NODE_ID=$(curl -sS -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/issues/$NUM" \
+              | python -c "import json,sys; print(json.load(sys.stdin).get('node_id',''))")
+
+            if [[ -z "$ISSUE_NODE_ID" ]]; then
+              echo "Could not resolve node_id for issue #$NUM"
+              echo "::endgroup::"
+              continue
+            fi
+
+            ITEM_ID=$(curl -sS -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Content-Type: application/json" \
+              -X POST https://api.github.com/graphql \
+              -d "$(python -c "import json,sys; print(json.dumps({'query':'mutation(\$p:ID!,\$c:ID!){addProjectV2ItemById(input:{projectId:\$p,contentId:\$c}){item{id}}}','variables':{'p':sys.argv[1],'c':sys.argv[2]}}))" "$PROJECT_ID" "$ISSUE_NODE_ID")" \
+              | python -c "import json,sys; d=json.load(sys.stdin); print(d['data']['addProjectV2ItemById']['item']['id'])")
+
+            curl -sS -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Content-Type: application/json" \
+              -X POST https://api.github.com/graphql \
+              -d "$(python -c "import json,sys; print(json.dumps({'query':'mutation(\$p:ID!,\$i:ID!,\$f:ID!,\$o:String!){updateProjectV2ItemFieldValue(input:{projectId:\$p,itemId:\$i,fieldId:\$f,value:{singleSelectOptionId:\$o}}){projectV2Item{id}}}','variables':{'p':sys.argv[1],'i':sys.argv[2],'f':sys.argv[3],'o':sys.argv[4]}}))" "$PROJECT_ID" "$ITEM_ID" "$STATUS_FIELD_ID" "$TARGET_OPTION")" \
+              > /dev/null
+
+            echo "Issue #$NUM moved to $BASE_REF status."
+            echo "::endgroup::"
+          done

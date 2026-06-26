@@ -1,0 +1,7 @@
+{
+  "name": "issue-flow",
+  "description": "Autonomous issue-driven dev flow (plan-issue, work-on-issue, report, push-to-prod, batch-work, ux-explore). The GitHub issue/PR is the single source of truth; per-project branch names and gate commands are read from .claude/flow.config.md at runtime, so the commands stay identical across every project.",
+  "author": {
+    "name": "Andrey Rasshchepkin"
+  }
+}

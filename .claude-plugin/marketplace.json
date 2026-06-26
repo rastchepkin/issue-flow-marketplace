@@ -1,0 +1,15 @@
+{
+  "$schema": "https://code.claude.com/schemas/marketplace.json",
+  "name": "issue-flow-marketplace",
+  "description": "Issue-driven Claude Code workflow: discussion → issue → TDD PR → report → release.",
+  "owner": {
+    "name": "Andrey Rasshchepkin"
+  },
+  "plugins": [
+    {
+      "name": "issue-flow",
+      "source": "./plugins/issue-flow",
+      "description": "Autonomous GitHub issue → branch → TDD → PR → merge → report → release flow. Stack-agnostic: per-project values live in .claude/flow.config.md."
+    }
+  ]
+}

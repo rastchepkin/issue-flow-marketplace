@@ -1,0 +1,67 @@
+{
+  "//": "Example .claude/settings.json for the issue-driven flow. The `permissions.allow` list pre-approves the read + git + GitHub-MCP calls the skills make, so the autonomous runs don't stop on permission prompts. Trim the Bash(...) tooling entries to YOUR stack (the ones below assume Python/uv + Node/npm). `defaultMode: acceptEdits` lets file edits through without prompts; drop it if you want stricter control.",
+  "permissions": {
+    "allow": [
+      "Read",
+      "Grep",
+      "Glob",
+      "WebFetch",
+      "WebSearch",
+      "TodoWrite",
+      "Skill",
+      "SlashCommand",
+
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(git checkout:*)",
+      "Bash(git switch:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git pull:*)",
+      "Bash(git fetch:*)",
+      "Bash(git merge:*)",
+      "Bash(git rebase:*)",
+      "Bash(git stash:*)",
+      "Bash(git restore:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git remote:*)",
+      "Bash(cd:*)",
+
+      "Bash(uv:*)",
+      "Bash(uv run:*)",
+      "Bash(pytest:*)",
+      "Bash(ruff:*)",
+      "Bash(mypy:*)",
+      "Bash(npm:*)",
+      "Bash(npx:*)",
+
+      "mcp__github__list_issues",
+      "mcp__github__list_pull_requests",
+      "mcp__github__get_file_contents",
+      "mcp__github__issue_read",
+      "mcp__github__pull_request_read",
+      "mcp__github__search_issues",
+      "mcp__github__search_code",
+      "mcp__github__issue_write",
+      "mcp__github__add_issue_comment",
+      "mcp__github__create_pull_request",
+      "mcp__github__update_pull_request",
+      "mcp__github__merge_pull_request"
+    ],
+    "deny": [
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(rm -rf:*)"
+    ],
+    "ask": [],
+    "defaultMode": "acceptEdits"
+  },
+  "enabledPlugins": {
+    "code-review@claude-plugins-official": true
+  }
+}
