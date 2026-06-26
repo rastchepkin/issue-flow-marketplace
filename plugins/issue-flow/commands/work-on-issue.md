@@ -94,7 +94,7 @@ After green unit-TDD, assess e2e applicability.
 
 - internal refactor without user-facing effect;
 - config/types/docs-only changes;
-- migrations without new tables in the `agent_ro` view layer.
+- migrations with no new user-visible or API surface.
 
 **If applicable:**
 

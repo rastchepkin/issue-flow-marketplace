@@ -52,7 +52,9 @@ issue-flow-marketplace/                      ← repo root (the marketplace)
 │       ├── report.md            ★ one final comment on an issue
 │       ├── push-to-prod.md      ★ cut a DEV→PROD release
 │       ├── batch-work.md        ○ run work-on-issue over many issues
-│       └── ux-explore.md        ○ UX wireframing partner → hands off to plan-issue
+│       ├── ux-explore.md        ○ UX wireframing partner → hands off to plan-issue
+│       ├── verify-deploy.md     ○ Dokploy: is the merge live? (targets from flow.config)
+│       └── mutation-test.md     ○ manual mutmut/Stryker over critical logic (targets from flow.config)
 ├── templates/                               ← copied INTO each target project (NOT part of the plugin)
 │   ├── flow.config.example.md               → becomes the project's .claude/flow.config.md (the only per-project coupling)
 │   ├── CLAUDE.snippet.md                    → merge into the project's CLAUDE.md

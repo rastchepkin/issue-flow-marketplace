@@ -123,11 +123,16 @@ Copy from `templates/` into the repo (merge where a file exists):
 
 ## Phase 7 — Deploy verification (only if `DEPLOY_VERIFY` ≠ `none`)
 
-The plugin does **not** ship a deploy-verify command (it's platform-specific). If the user wants one:
-write a project-local `.claude/commands/verify-deploy.md` for their platform (poll the deploy, compare
-the deployed git SHA against the merge SHA, return a one-line verdict — never print secrets), and set
-`DEPLOY_VERIFY` + `DEPLOY_VERIFY_SKILL: /verify-deploy` in flow.config. Otherwise leave
-`DEPLOY_VERIFY: none` and the work-on-issue/push-to-prod deploy steps self-skip.
+The plugin ships `/issue-flow:verify-deploy` for **Dokploy**-hosted backends whose health endpoint
+exposes the running git SHA. To enable it: set `DEPLOY_VERIFY: dokploy`, `DEPLOY_VERIFY_SKILL:
+/issue-flow:verify-deploy`, and fill the `DEPLOY_*` target keys (app ids, health URLs, base URLs) plus
+the optional `LOGS_*` / `PLAYWRIGHT_*` keys in `.claude/flow.config.md` — those targets are per-project
+and never live in the marketplace. For a **non-Dokploy** platform, write a project-local
+`.claude/commands/verify-deploy.md` instead and point `DEPLOY_VERIFY_SKILL` at it. Otherwise leave
+`DEPLOY_VERIFY: none` and the deploy steps self-skip.
+
+`/issue-flow:mutation-test` (manual-only mutmut/Stryker) is also shipped; set the `MUTATION_*` keys in
+flow.config to point it at this project's critical modules, or leave the tools `none` to disable it.
 
 ## Phase 8 — Verify the install
 
