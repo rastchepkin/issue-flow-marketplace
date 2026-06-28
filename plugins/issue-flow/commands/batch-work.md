@@ -1,6 +1,6 @@
 ---
 description: Batch-run /work-on-issue across multiple issues, isolating context per task via sub-agents
-argument-hint: "<N1,N2,N3,...> [-no-merge] [-bypass | -bypass_low]"
+argument-hint: "<N1,N2,N3,...> [-no-merge] [-bypass | -bypass-low]"
 model: haiku
 ---
 
@@ -20,15 +20,15 @@ Keep machine-level tokens verbatim (do not translate them): JSON field values (`
 
 `$ARGUMENTS` carries the issue list plus optional flags. Separate them first:
 
-- **flags** — tokens starting with `-`. Recognized: `-no-merge`, `-bypass`, `-bypass_low` (see Modes below). An unknown `-token` → stop and ask.
+- **flags** — tokens starting with `-`. Recognized: `-no-merge`, `-bypass`, `-bypass-low` (see Modes below). An unknown `-token` → stop and ask.
 - **issue list** — the remaining tokens. Split by `,`, strip whitespace, validate every token is a positive integer. On parse failure (empty list, non-numeric token) — stop and ask the user (in Russian).
 
 Tasks run **strictly in order** as given. No parallelism: they share the same git working tree, and parallel branch checkouts would corrupt local state.
 
 ## Modes
 
-- **default (no `-no-merge`)** — each issue is driven all the way through `/issue-flow:work-on-issue`: branch → TDD → PR → green CI → **merge** → report. `-bypass` / `-bypass_low` are forwarded verbatim to each sub-agent's `/work-on-issue` run, relaxing its existing-test gate (see `/work-on-issue` Arguments). Without a bypass flag the test gate still escalates to you mid-batch, exactly as today.
-- **`-no-merge` (overnight review mode)** — built for an unattended night run that you review in the morning. Each issue is driven to **PR open + green CI and then STOPS — it is NOT merged**, no post-merge report, no deploy-verify. So the batch never blocks waiting for you, `-no-merge` **implies `-bypass`**: existing-test changes are applied automatically and **recorded** (not escalated). The morning batch log lists, per issue, the PR URL plus the plain-language test-change cards, so you do the test review and the merge yourself in the morning. (`-bypass_low` is ignored under `-no-merge` — unattended runs must not pause on `Средне`/`Высоко`.)
+- **default (no `-no-merge`)** — each issue is driven all the way through `/issue-flow:work-on-issue`: branch → TDD → PR → green CI → **merge** → report. `-bypass` / `-bypass-low` are forwarded verbatim to each sub-agent's `/work-on-issue` run, relaxing its existing-test gate (see `/work-on-issue` Arguments). Without a bypass flag the test gate still escalates to you mid-batch, exactly as today.
+- **`-no-merge` (overnight review mode)** — built for an unattended night run that you review in the morning. Each issue is driven to **PR open + green CI and then STOPS — it is NOT merged**, no post-merge report, no deploy-verify. So the batch never blocks waiting for you, `-no-merge` **implies `-bypass`**: existing-test changes are applied automatically and **recorded** (not escalated). The morning batch log lists, per issue, the PR URL plus the plain-language test-change cards, so you do the test review and the merge yourself in the morning. (`-bypass-low` is ignored under `-no-merge` — unattended runs must not pause on `Средне`/`Высоко`.)
 
 ## Per-task loop
 
@@ -77,7 +77,7 @@ Preflight plan (already visible to the user):
 <plan from Step A, unescaped>
 Branch type: <branch_type from Step A>
 
-1. Follow the `/issue-flow:work-on-issue` command's steps exactly (invoke it, or follow its documented flow), as if invoked `/work-on-issue N <FLAGS>` where <FLAGS> = the bypass flags forwarded by the batch (`-bypass` / `-bypass_low`, or none). Honor those flags at its existing-test gate (step 3.6). Skip the user-facing notification in step 1 (the parent already showed the plan); still read the issue + comments yourself to ground the work.
+1. Follow the `/issue-flow:work-on-issue` command's steps exactly (invoke it, or follow its documented flow), as if invoked `/work-on-issue N <FLAGS>` where <FLAGS> = the bypass flags forwarded by the batch (`-bypass` / `-bypass-low`, or none). Honor those flags at its existing-test gate (step 3.6). Skip the user-facing notification in step 1 (the parent already showed the plan); still read the issue + comments yourself to ground the work.
 2. Override its interactive behavior: **do NOT ask the user for confirmation** at any step. If any step would normally pause for a user decision that the forwarded flags do NOT auto-resolve (merge conflict on develop, repeatedly red CI you cannot fix in 2–3 iterations, AC ambiguity, scope expansion, a security finding, or an existing-test change not covered by the active bypass flag) — **stop and return** a structured escalation to the parent, then exit.
    <MODE LINE — substitute one:>
    • default: drive the issue to the very end — merge to develop, auto-report, deploy-verify — per /work-on-issue steps 7–8.5.
@@ -134,7 +134,7 @@ After the last N (or user-requested abort), print the batch log under a Russian 
 ## Forbidden
 
 - Do not run issues in parallel. Sequential only — shared working tree.
-- Do not auto-resolve escalations **that the active flags do not explicitly cover**. With no bypass flag, the existing-test gate (step 3.6) must always reach the user — that is its default purpose; `-bypass`/`-bypass_low`/`-no-merge` relax it deliberately and the morning log records what was applied.
+- Do not auto-resolve escalations **that the active flags do not explicitly cover**. With no bypass flag, the existing-test gate (step 3.6) must always reach the user — that is its default purpose; `-bypass`/`-bypass-low`/`-no-merge` relax it deliberately and the morning log records what was applied.
 - Do not skip `/work-on-issue`'s green-CI wait — the sub-agent must wait for green CI in **every** mode, including `-no-merge` (it stops *after* green CI, never before).
 - In `-no-merge` mode, do not merge any PR — leave them open for the user's morning review.
 - Do not retain or echo sub-agent narration in the main window. Only the JSON object's parsed fields, and only what the batch log needs.

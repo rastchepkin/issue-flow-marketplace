@@ -1,6 +1,6 @@
 ---
 description: Autonomously drive an issue to merge into develop and publish a report — no per-step confirmations
-argument-hint: "<issue-number> [-bypass_low | -bypass]"
+argument-hint: "<issue-number> [-bypass-low | -bypass]"
 model: opus
 ---
 
@@ -14,7 +14,7 @@ Before any `mcp__github__*` call, resolve `<OWNER>` and `<REPO>` from `git remot
 
 - **`<N>`** — the single positive integer in `$ARGUMENTS`. **Everywhere below, `$ARGUMENTS` used as an issue number means `<N>`** (flags stripped) — in `#$ARGUMENTS`, `issue_number=$ARGUMENTS`, the branch name, `Closes #$ARGUMENTS`, and the `/report $ARGUMENTS` hand-off. If no integer is present, stop and ask.
 - **flags** — tokens starting with `-`. Only these are recognized; they relax the **existing-test gate** (step 3.6) and nothing else:
-  - **`-bypass_low`** — auto-accept existing-test changes when **every** changed test group is **Low** risk; still stop and ask if any group is **Medium** or **High**.
+  - **`-bypass-low`** — auto-accept existing-test changes when **every** changed test group is **Low** risk; still stop and ask if any group is **Medium** or **High**.
   - **`-bypass`** — auto-accept **all** existing-test changes regardless of risk; never pause at the gate.
   - none (default) — current behavior: any edit/deletion of an existing test stops and asks.
 
@@ -45,7 +45,7 @@ This is an **autonomous flow** in the spirit of a Replit-style agent. By default
 - red tests/linter that could not be fixed in 2–3 iterations;
 - request for an action outside issue scope (new DB migrations, removal of public API, CI/infra changes);
 - CI check failed for a reason that cannot be fixed by a local patch (e.g., secrets/environment);
-- **modification or deletion of existing tests** — a change to guardrails, gated at step 3.6. By default an explicit confirmation is required; the `-bypass_low` / `-bypass` flags relax this gate (see Arguments and step 3.6). Adding new tests is fine, no confirmation needed.
+- **modification or deletion of existing tests** — a change to guardrails, gated at step 3.6. By default an explicit confirmation is required; the `-bypass-low` / `-bypass` flags relax this gate (see Arguments and step 3.6). Adding new tests is fine, no confirmation needed.
 - **`/security-review` flagged a security problem** (see step 5.6) — never auto-fix-and-merge a security finding; surface it to the user and stop.
 
 In all other cases — proceed to the end without pauses.
@@ -130,7 +130,7 @@ git diff develop... --stat -- '**/test_*.py' '**/*.test.*' '**/*.test.tsx' '**/t
 If the diff contains **deleted** test files, **renamed** or **modified** existing test cases (including `pytest.mark.skip`/`xfail` on a previously passing test), this gate engages. First **classify each changed test group's risk** (`Низко` / `Средне` / `Высоко`) using the same judgment the report template below asks for. Then decide how to proceed **based on the flags parsed in Arguments**:
 
 - **default (no flag)** — stop and post the report below; **wait for explicit confirmation** before committing the test changes.
-- **`-bypass_low`** — if **every** changed group is `Низко`, auto-accept (commit without waiting) and post the same cards as a **non-blocking** note prefixed `Изменения тестов приняты автоматически (риск низкий, флаг -bypass_low):`. If **any** group is `Средне`/`Высоко`, fall back to the default: post the report and **wait**.
+- **`-bypass-low`** — if **every** changed group is `Низко`, auto-accept (commit without waiting) and post the same cards as a **non-blocking** note prefixed `Изменения тестов приняты автоматически (риск низкий, флаг -bypass-low):`. If **any** group is `Средне`/`Высоко`, fall back to the default: post the report and **wait**.
 - **`-bypass`** — auto-accept **all** changed groups regardless of risk; commit without waiting and post the same cards as a **non-blocking** note prefixed `Изменения тестов приняты автоматически (флаг -bypass):` so the change stays visible for later review.
 
 When changes are auto-accepted (either bypass path), do **not** wait for a reply — but still emit the cards (so the user can review after the fact) and still list every modified/deleted test in the PR body's "Test changes" section (step 5). Auto-acceptance never applies to a brand-new behavior that contradicts the issue AC — if a test change implies the AC itself is wrong, that is an AC ambiguity fork (Mode), not a test-gate decision, and it escalates regardless of `-bypass`.
@@ -163,7 +163,7 @@ Template (fill in, keep this shape and language):
 Подтверди изменения тестов — или скажи, что поправить.
 ```
 
-On the **default / waiting** path: wait for explicit confirmation, and after "yes" — commit test changes as a **separate** `test:` commit (or several, if logically distinct), so guardrail edits read at a glance in `git log`. On an **auto-accepted** path (`-bypass`, or `-bypass_low` with all-`Низко` groups): commit the same way **without** waiting, right after emitting the non-blocking note.
+On the **default / waiting** path: wait for explicit confirmation, and after "yes" — commit test changes as a **separate** `test:` commit (or several, if logically distinct), so guardrail edits read at a glance in `git log`. On an **auto-accepted** path (`-bypass`, or `-bypass-low` with all-`Низко` groups): commit the same way **without** waiting, right after emitting the non-blocking note.
 
 If the user refuses (waiting path only) — reconsider the approach: maybe the new behavior should coexist with the old, or the AC is formulated incorrectly.
 
@@ -205,7 +205,7 @@ Closes #$ARGUMENTS
 ## Test changes
 <one of:>
 - Only new tests added; existing tests not touched.
-- Existing tests modified/deleted (gate per step 3.6 — confirmed by user, or auto-accepted via `-bypass_low`/`-bypass`; state which and the risk):
+- Existing tests modified/deleted (gate per step 3.6 — confirmed by user, or auto-accepted via `-bypass-low`/`-bypass`; state which and the risk):
   - `path/to/test_file.py::test_name` — deleted / rewritten / skipped. Risk: low/medium/high. Reason: <…>
   - …
 
@@ -215,7 +215,7 @@ Closes #$ARGUMENTS
 - [x] `ruff check .` clean
 - [x] `mypy --strict` clean
 - [x] E2E test added/updated OR noted "E2E not applicable: <reason>"
-- [x] Existing-test changes confirmed by user / auto-accepted via `-bypass`/`-bypass_low` OR existing tests not touched
+- [x] Existing-test changes confirmed by user / auto-accepted via `-bypass`/`-bypass-low` OR existing tests not touched
 - [ ] docs/README updated if needed
 ```
 
