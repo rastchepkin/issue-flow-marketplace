@@ -222,14 +222,29 @@ This is **one** round. Do not re-run `code-review:code-review` after applying th
 
 ### 5.6. Security review — hard gate before merge
 
-After the code-review fixes are pushed, run `/security-review` on the branch's pending changes. This is a **blocking gate**: a clean review is required to reach merge.
+After the code-review fixes are pushed, run the security review on the branch's pending changes (skip this whole step if `SECURITY_REVIEW` is `none`). This is a **blocking gate**: a clean review is required to reach merge.
 
-- **No security problems found** → proceed to step 6.
-- **Any security problem found** → **stop. Do not wait for CI, do not merge, do not run `/report`, do not wrap up the issue.** Escalate to the user in chat and end the autonomous flow there.
+Run it as an **isolated subagent**, not inline. A direct `/security-review` invocation dumps its full multi-paragraph report into this flow's context and ends the turn — which forces a needless "continue" confirmation on a *clean* review, the exact opposite of an autonomous flow. The subagent absorbs that verbosity and hands back only a compact verdict, so a clean review flows straight through with no pause and no wall of text.
+
+```
+Agent(
+  subagent_type="general-purpose",
+  description="Security review",
+  prompt="Run the `SECURITY_REVIEW` command on the pending changes of the current branch (the PR's diff vs DEV_BRANCH). Follow it exactly. Then return ONLY a compact verdict, nothing else:
+  - First line: exactly `VERDICT: CLEAN` (no HIGH/MEDIUM-confidence findings) or `VERDICT: FINDINGS`.
+  - If FINDINGS: one block per finding with risk, file/line, and a one-line suggested fix.
+  Do not print the full narrative report, do not print secrets, do not ask me anything."
+)
+```
+
+Branch on the returned verdict — **do not** ask the user which way to go; the verdict decides:
+
+- **`VERDICT: CLEAN`** → emit **one line** to the user (e.g. "Security review: чисто, продолжаю") and **proceed straight to step 6**. Do not paste the review output, do not wait for confirmation, do not end the turn here.
+- **`VERDICT: FINDINGS`** → **stop. Do not wait for CI, do not merge, do not run `/report`, do not wrap up the issue.** Escalate to the user in chat and end the autonomous flow there.
 
 The escalation is a **user-facing chat message** — write it in the **user's language** (currently Russian), plain words, no jargon. For each finding: what is the risk, where (file/line), and a one-line suggested fix. Make clear the PR is open but **deliberately not merged** pending the user's decision, and that resuming means re-running `/work-on-issue $ARGUMENTS` (or telling you how to handle each finding). Leave the branch and PR as-is — do not close them.
 
-A security finding is a **real fork** (see Mode): the agent does not silently auto-fix security issues and then merge — the user must see them first.
+A security finding is a **real fork** (see Mode): the agent does not silently auto-fix security issues and then merge — the user must see them first. A clean review is **not** a fork — never pause on it.
 
 ### 6. Wait for green CI
 
