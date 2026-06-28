@@ -1,6 +1,7 @@
 ---
 description: On-demand mutation testing (mutmut / StrykerJS) over a project's critical logic — reports a mutation score and surviving mutants, never a CI gate
 argument-hint: [backend | frontend | <path-or-glob>]
+model: sonnet
 ---
 
 Run **mutation testing** on demand and report the result. Mutation testing injects deliberate logic bugs (`>`→`>=`, `and`→`or`, `return x`→`return None`, …), reruns the suite per mutant, and reports a **mutation score** = killed / total. **Surviving** mutants pinpoint logic that no assertion actually checks — they are the output that matters.

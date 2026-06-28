@@ -1,6 +1,7 @@
 ---
 description: One final comment on an issue — what was done, how it works, what remains (no preview-confirm)
 argument-hint: <issue-number>
+model: sonnet
 ---
 
 Post **exactly one** structured comment on issue `#$ARGUMENTS` in the current repo. The comment is the work outcome and the source of truth for future sessions.

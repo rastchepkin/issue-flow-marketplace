@@ -1,6 +1,7 @@
 ---
 description: Discussion → GitHub issue (English, by template, no duplicates)
 argument-hint: "[short task description]"
+model: sonnet
 ---
 
 Turn the current discussion (or `$ARGUMENTS`) into a GitHub issue in the current repo. The issue is the single source of truth for the task; creating local plan files is **forbidden**.
