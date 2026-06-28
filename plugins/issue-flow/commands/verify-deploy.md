@@ -1,6 +1,7 @@
 ---
 description: Verify a merge actually reached the running app on Dokploy — compare the deployed git SHA against the merge commit, optionally drive the live UI, diagnose build failures (read-only)
 argument-hint: <merge-sha> [dev|prod]
+model: haiku
 ---
 
 Confirm that the commit just merged is **live on the running app**, not merely merged on GitHub. The reliable, change-agnostic signal is **the deployed git SHA vs. the merge commit SHA** — the app's health endpoint reports the running image's SHA, so a match means the new image is actually serving traffic.

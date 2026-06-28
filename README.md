@@ -81,3 +81,23 @@ issue-flow-marketplace/                      ← repo root (the marketplace)
    `/plugin marketplace update issue-flow-marketplace` in each project.
 
 See `APPLY.md` for the exact step-by-step.
+
+## Cost: per-command model tiering
+
+Each command pins a `model:` in its frontmatter, so the flow runs cost-effectively regardless of your
+session model — the strong (expensive) model is reserved for the work that actually benefits from it:
+
+| Model | Commands | Why |
+|---|---|---|
+| **opus** | `work-on-issue` | writes/debugs code, drives the TDD loop, makes design calls — quality here = fewer failed iterations |
+| **sonnet** | `plan-issue`, `ux-explore`, `push-to-prod`, `report`, `mutation-test` | structured writing, UX reasoning, procedural orchestration with guardrails |
+| **haiku** | `batch-work`, `verify-deploy` | thin orchestrator / mechanical poll-and-compare — the heavy lifting lives in the sub-agents they spawn |
+
+Sub-agents get their model from the spawn, not the command frontmatter, so those are set explicitly too:
+`batch-work`'s work sub-agents run on **opus** (they execute the full `/work-on-issue` flow) while its
+read-only preflight runs on **haiku**; the `verify-deploy` sub-agents dispatched by `work-on-issue` and
+`push-to-prod` run on **haiku**.
+
+To change a command's tier, edit its `model:` line (`opus` / `sonnet` / `haiku`), push, and
+`/plugin marketplace update` in each project. To let a command follow your session model instead, delete
+its `model:` line.

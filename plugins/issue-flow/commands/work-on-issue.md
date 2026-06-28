@@ -1,6 +1,7 @@
 ---
 description: Autonomously drive an issue to merge into develop and publish a report — no per-step confirmations
 argument-hint: <issue-number>
+model: opus
 ---
 
 Take issue `#$ARGUMENTS` in the current repo and drive it to completion **autonomously**: branch → TDD → PR → green CI → merge to `develop` → automatic `/report`. The issue is the single source of truth.
@@ -324,6 +325,7 @@ Then dispatch the subagent, pointing it at the `DEPLOY_VERIFY_SKILL` for `DEV_BR
 ```
 Agent(
   subagent_type="general-purpose",
+  model="haiku",
   description="Verify deploy",
   prompt="Run the <DEPLOY_VERIFY_SKILL> command for merge SHA <SHA> on the DEV_BRANCH environment. Follow it exactly and return its single compact verdict block. Do not print secrets."
 )

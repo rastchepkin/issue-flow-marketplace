@@ -1,5 +1,6 @@
 ---
 description: Cut a release — open develop → main PR, wait for green CI, merge as merge-commit, and let project-status.yml move closed issues to Production
+model: sonnet
 ---
 
 Promote everything currently on `develop` to `main` via a release PR, wait for CI, merge as a **merge commit** (not squash), and rely on `.github/workflows/project-status.yml` to move each linked issue's project card to **Production**.
@@ -180,6 +181,7 @@ Then dispatch the subagent, pointing it at the `DEPLOY_VERIFY_SKILL` for the pro
 ```
 Agent(
   subagent_type="general-purpose",
+  model="haiku",
   description="Verify production deploy",
   prompt="Run the <DEPLOY_VERIFY_SKILL> command for merge SHA <SHA> on the production environment. Follow it exactly and return its single compact verdict block. Do not print secrets."
 )

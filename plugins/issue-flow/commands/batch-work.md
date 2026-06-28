@@ -1,6 +1,7 @@
 ---
 description: Batch-run /work-on-issue across multiple issues, isolating context per task via sub-agents
 argument-hint: "<N1,N2,N3,...>"
+model: haiku
 ---
 
 Batch-execute `/issue-flow:work-on-issue` for the list of issue numbers in `$ARGUMENTS` (e.g., `12,15,18`). Each issue runs in an isolated sub-agent context so the main agent's window stays clean across the batch — the main agent only carries a one-line summary per finished task.
@@ -29,7 +30,7 @@ For each issue number `N` in order:
 
 Direct `/work-on-issue` produces a 3–6 line plan (task, AC, approach, affected files) at its step 1 as a visible notification. In batch mode that notification is otherwise swallowed by the sub-agent, so kick off a tiny **read-only** preflight sub-agent first to recover that visibility.
 
-Use the `Agent` tool with `subagent_type=claude`. Prompt (self-contained):
+Use the `Agent` tool with `subagent_type=claude` and `model=haiku` (this preflight is read-only analysis — a cheap model is enough). Prompt (self-contained):
 
 ```
 You are running a read-only pre-flight for issue #N in the current repo. Do NOT branch, edit, commit, or run tests — analysis only.
@@ -59,7 +60,7 @@ On `status=failed` from preflight — append a Russian batch-log line `#N — П
 
 ### Step B. Spawn the work sub-agent
 
-Use the `Agent` tool with `subagent_type=claude`. The sub-agent prompt must be **self-contained** (sub-agent has no memory of this conversation). Pass it:
+Use the `Agent` tool with `subagent_type=claude` and `model=opus` (this sub-agent runs the full `/work-on-issue` coding flow — give it the strongest model, since the orchestrator itself runs cheap). The sub-agent prompt must be **self-contained** (sub-agent has no memory of this conversation). Pass it:
 
 ```
 You are executing /work-on-issue for issue #N in the current repo. A read-only preflight has already shown the user the plan below — do NOT re-emit it.
@@ -90,7 +91,7 @@ Parse the JSON object the sub-agent returned.
 
 - **`status=done`** → append one line to the in-memory batch log: `#N — <pr_url> — AC <ac>`. Continue to the next N.
 - **`status=escalation`** → relay `details` to the user verbatim (in the language the sub-agent produced it), plus one Russian preface line: `Issue #N остановлен на шаге <step> в ветке <branch>: <reason>. Жду твоё решение.` Wait for the user's reply.
-  After the user replies, spawn a **fresh** sub-agent with a continuation prompt:
+  After the user replies, spawn a **fresh** sub-agent (again `subagent_type=claude`, `model=opus` — it resumes the coding flow) with a continuation prompt:
 
   ```
   You are resuming /work-on-issue for issue #N.
