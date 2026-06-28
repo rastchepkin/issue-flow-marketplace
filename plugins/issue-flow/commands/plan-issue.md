@@ -1,12 +1,21 @@
 ---
-description: Discussion → GitHub issue (English, by template, no duplicates)
-argument-hint: "[short task description]"
+description: Discussion → GitHub issue (English, by template, no duplicates). Default: product review (UX + plan/AC sign-off); -auto creates straight away.
+argument-hint: "[short task description] [-auto]"
 model: sonnet
 ---
 
 Turn the current discussion (or `$ARGUMENTS`) into a GitHub issue in the current repo. The issue is the single source of truth for the task; creating local plan files is **forbidden**.
 
 Before any `mcp__github__*` call, resolve `<OWNER>` and `<REPO>` from `git remote get-url origin` (format `https://github.com/<OWNER>/<REPO>.git`) — this file is template-shaped and must not hardcode a specific repo.
+
+## Arguments
+
+`$ARGUMENTS` is the task description plus an optional flag. Parse it:
+
+- **`-auto`** — autonomous mode: skip the UX step, the discussion, and the sign-off; if the context is clear, create the issue straight away (the behavior this command used to have by default). Use it for small/obvious tasks and unattended runs.
+- **no flag (default)** — **product-review mode**: explore the UX when the change touches the frontend, discuss the change with the user, and present a product-change plan + AC for sign-off **before** creating the issue. Use it for anything a manager should approve first.
+
+Strip the flag from the text; the remaining words are the task description.
 
 ## Project config — read this first
 
@@ -22,19 +31,55 @@ Sibling commands are namespaced under the plugin: `/issue-flow:plan-issue`, `/is
 
 ## Mode
 
-The command runs **autonomously**: if the discussion gives enough context, create the issue without preview and without asking for confirmation. Stop and ask **only** at a real fork:
+Behavior depends on the flag parsed in Arguments.
+
+**`-auto` — autonomous.** If the discussion gives enough context, create the issue without preview and without asking for confirmation. Stop and ask **only** at a real fork:
 
 - the task sounds vague and 1–3 clarifying questions are needed to formulate AC;
 - a potential duplicate is found — user decision required (new / comment on existing / drop topic);
 - ambiguity of type (feature vs bug) that cannot be resolved from context.
 
+**default — product review.** Do **not** create the issue silently. First run the product-review pre-flow (step 0 below): UX exploration when the frontend is touched, a short discussion, and an explicit plan + AC sign-off. Only after the user approves do you proceed to steps 2–5. The duplicate/type forks above still apply (raise them during the discussion). All pre-flow output is in `USER_LANGUAGE`.
+
 ## Steps
+
+### 0. Product-review pre-flow (default mode only; skip entirely under `-auto`)
+
+Goal: let a non-engineer (a manager) shape and approve the change before it becomes an issue.
+
+**0.1. UX exploration when the frontend is involved.** Decide whether the task plausibly changes something the user sees or interacts with — a new/changed screen, control, flow, state, or visual. If yes **and** the project actually has a frontend (its `FE_*` gates in `.claude/flow.config.md` are not `none`), run **`/issue-flow:ux-explore`** on the task first and carry its outcome (chosen UI element, placement, states, flow) into the discussion and into the issue's "Proposed solution". For backend-only / config / docs tasks, skip UX.
+
+**0.2. Discuss the change.** Talk it through with the user in `USER_LANGUAGE`: confirm the goal, scope, edge cases, and what is explicitly out of scope. Ask the 1–3 clarifying questions you would otherwise defer. Surface duplicate/overlap findings here if step 3's context-gathering (which you may do early) turns any up.
+
+**0.3. Present the plan + AC for sign-off.** Before creating anything, post a compact, **non-engineer-readable** summary in `USER_LANGUAGE` and **wait for approval**:
+
+```markdown
+Согласуем перед заведением задачи:
+
+ЧТО МЕНЯЕМ (для пользователя)
+<2–4 строки простыми словами: что человек увидит/сможет делать по-новому>
+
+UX (если был /ux-explore)
+<1–2 строки: какой элемент/экран/флоу выбрали; иначе строку опускаем>
+
+КРИТЕРИИ ПРИЁМКИ (AC)
+- [ ] <измеримый критерий 1>
+- [ ] <измеримый критерий 2>
+
+ВНЕ ЗАДАЧИ
+<что сознательно не делаем сейчас>
+
+—————
+Ок заводить задачу с этим планом? Или что поправить?
+```
+
+On "ок" → proceed to step 2 with the agreed plan/AC as the basis for the body. On edits → revise and re-confirm. The English issue body (steps 4–5) must match what was approved here.
 
 ### 1. Clarify scope (only if needed)
 
-If the discussion and `$ARGUMENTS` make the task and AC clear — skip this step.
+In **default mode** the clarifying happened in step 0.2 — skip this step.
 
-If vague — ask **1–3 targeted questions** before creating the issue. No more.
+In **`-auto` mode**: if the discussion and `$ARGUMENTS` make the task and AC clear — skip this step; if vague — ask **1–3 targeted questions** before creating the issue. No more.
 
 ### 2. Classify and pick template
 
@@ -142,7 +187,7 @@ Title — short, to the point, English, prefixed with `[feat]` or `[bug]`.
 
 ### 5. Create
 
-Create the issue **immediately**, without preview and without asking the user (if steps 1 and 3 did not reveal a fork):
+Create the issue. In **default mode** the plan/AC were already approved in step 0.3, so create it now (do not ask a second time) with a body that matches what was signed off. In **`-auto` mode** create it **immediately**, without preview and without asking the user (if steps 1 and 3 did not reveal a fork):
 
 ```
 mcp__github__issue_write(
@@ -161,4 +206,4 @@ Return the user the number and URL of the created issue in one line.
 
 - Do not create files in `.claude/plans/`, `notes/` (for an active task), or `*-plan.md` at the repo root. The plan lives **only** in the issue body.
 - Do not use `gh issue create` — only `mcp__github__issue_write`.
-- Do not show a preview before creation when the discussion is clear — this is an autonomous command.
+- Under `-auto`, do not show a preview before creation when the discussion is clear — that mode is autonomous. (Default mode is the opposite: the step 0.3 sign-off is required before creating.)
