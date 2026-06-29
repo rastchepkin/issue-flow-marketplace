@@ -23,12 +23,23 @@ Keep machine-level tokens verbatim (do not translate them): JSON field values (`
 - **flags** — tokens starting with `-`. Recognized: `-no-merge`, `-bypass`, `-bypass-low` (see Modes below). An unknown `-token` → stop and ask.
 - **issue list** — the remaining tokens. Split by `,`, strip whitespace, validate every token is a positive integer. On parse failure (empty list, non-numeric token) — stop and ask the user (in Russian).
 
+**Incompatible flags — treat as an input error, do not run.** `-no-merge` already implies a full `-bypass` (unattended runs must never pause), so combining it with `-bypass-low` is contradictory: `-bypass-low` asks to *escalate* `Средне`/`Высоко` test changes, which an unattended night run cannot do. If both `-no-merge` and `-bypass-low` are present, **stop immediately** (before spawning any sub-agent) and ask the user (in Russian) to pick one, e.g.:
+
+```
+Флаги -no-merge и -bypass-low несовместимы: -no-merge не может останавливаться на «Средне/Высоко», а -bypass-low именно этого и требует. Что делаем?
+1) -no-merge — ночной прогон, все изменения тестов применяются автоматически, риск смотришь утром в отчёте.
+2) -no-merge -bypass — то же самое, явно.
+3) -bypass-low без -no-merge — мёржащий прогон, останавливаюсь на «Средне/Высоко».
+```
+
+(`-no-merge -bypass` is fine — `-bypass` is redundant there but not contradictory.)
+
 Tasks run **strictly in order** as given. No parallelism: they share the same git working tree, and parallel branch checkouts would corrupt local state.
 
 ## Modes
 
 - **default (no `-no-merge`)** — each issue is driven all the way through `/issue-flow:work-on-issue`: branch → TDD → PR → green CI → **merge** → report. `-bypass` / `-bypass-low` are forwarded verbatim to each sub-agent's `/work-on-issue` run, relaxing its existing-test gate (see `/work-on-issue` Arguments). Without a bypass flag the test gate still escalates to you mid-batch, exactly as today.
-- **`-no-merge` (overnight review mode)** — built for an unattended night run that you review in the morning. Each issue is driven to **PR open + green CI and then STOPS — it is NOT merged**, no post-merge report, no deploy-verify. So the batch never blocks waiting for you, `-no-merge` **implies `-bypass`**: existing-test changes are applied automatically and **recorded** (not escalated). The morning batch log lists, per issue, the PR URL plus the plain-language test-change cards, so you do the test review and the merge yourself in the morning. (`-bypass-low` is ignored under `-no-merge` — unattended runs must not pause on `Средне`/`Высоко`.)
+- **`-no-merge` (overnight review mode)** — built for an unattended night run that you review in the morning. Each issue is driven to **PR open + green CI and then STOPS — it is NOT merged**, no post-merge report, no deploy-verify. So the batch never blocks waiting for you, `-no-merge` **implies `-bypass`**: existing-test changes are applied automatically and **recorded** (not escalated). The morning batch log lists, per issue, the PR URL plus the plain-language test-change cards, so you do the test review and the merge yourself in the morning. Combining `-no-merge` with `-bypass-low` is rejected as an input error (see Parsing) — an unattended run cannot honor `-bypass-low`'s "escalate `Средне`/`Высоко`" promise.
 
 ## Per-task loop
 
