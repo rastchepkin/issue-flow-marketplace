@@ -46,7 +46,7 @@ This is an **autonomous flow** in the spirit of a Replit-style agent. By default
 - request for an action outside issue scope (new DB migrations, removal of public API, CI/infra changes);
 - CI check failed for a reason that cannot be fixed by a local patch (e.g., secrets/environment);
 - **modification or deletion of existing tests** — a change to guardrails, gated at step 3.6. By default an explicit confirmation is required; the `-bypass-low` / `-bypass` flags relax this gate (see Arguments and step 3.6). Adding new tests is fine, no confirmation needed.
-- **`/security-review` flagged a security problem** (see step 5.6) — never auto-fix-and-merge a security finding; surface it to the user and stop.
+- **`/security-review` flagged a security problem** (see step 5.6) — never auto-fix-and-merge a security finding; surface it to the user and stop. Only an **actual finding** is the fork: a **clean** security review is **not** a stop point — it is a pass-through, keep going to CI/merge in the same turn without pausing.
 
 In all other cases — proceed to the end without pauses.
 
@@ -241,10 +241,12 @@ This is **one** round. Do not re-run `code-review:code-review` after applying th
 
 ### 5.6. Security review — hard gate before merge
 
-After the code-review fixes are pushed, run `/security-review` on the branch's pending changes. This is a **blocking gate**: a clean review is required to reach merge.
+After the code-review fixes are pushed, run `/security-review` on the branch's pending changes. This gate is **one-directional**: only an actual **finding** stops the flow. A clean result is **not** a checkpoint and **not** a place to pause.
 
-- **No security problems found** → proceed to step 6.
+- **No security problems found** → continue **immediately** into step 6 in the **same** turn. Do **not** pause, do **not** wait for confirmation, and do **not** post a standalone "security review passed / all clear" message and then end your turn — that counts as a wrongful stop. A clean review is a pass-through; at most note it in one line on the way to step 6.
 - **Any security problem found** → **stop. Do not wait for CI, do not merge, do not run `/report`, do not wrap up the issue.** Escalate to the user in chat and end the autonomous flow there.
+
+**Never wait by polling for the review result.** Both `/security-review` and `code-review` return their result **synchronously** from the skill invocation itself — the moment the call returns, you have the verdict. Do **not** spawn a background `Bash`/`sleep` loop, and do **not** create a "wait until the agent(s) post their result" task: there is nothing to wait for, and a background bash wait **dies when the container is reclaimed**, leaving a task stuck as "running" forever and hanging the whole flow. The only legitimate wait in this flow is the inline CI poll in step 6.
 
 The escalation is a **user-facing chat message** — write it in the **user's language** (currently Russian), plain words, no jargon. For each finding: what is the risk, where (file/line), and a one-line suggested fix. Make clear the PR is open but **deliberately not merged** pending the user's decision, and that resuming means re-running `/work-on-issue $ARGUMENTS` (or telling you how to handle each finding). Leave the branch and PR as-is — do not close them.
 
@@ -254,7 +256,7 @@ A security finding is a **real fork** (see Mode): the agent does not silently au
 
 The CI check to wait on is named `CI_CHECK_NAME` (from `.claude/flow.config.md`; default `CI`), triggered on `pull_request`. **Always** wait for it to pass **before** merge — even if everything is green locally.
 
-Poll status via MCP at ~30–45 second intervals (no faster) until all checks complete:
+Poll status via MCP at ~30–45 second intervals (no faster) until all checks complete. Run this poll **inline** — repeated MCP calls within your own turn. **Never** offload the wait to a background `Bash`/`sleep` task: such waits die on container reclaim and leave the flow hanging (same reason as step 5.6).
 
 ```
 mcp__github__pull_request_read(
