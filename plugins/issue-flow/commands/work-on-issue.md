@@ -276,6 +276,14 @@ This is **one** round. Do not re-run `code-review:code-review` after applying th
 
 ### 5.6. Security review — hard gate before merge
 
+First make sure `origin/HEAD` resolves — `/security-review` diffs against `origin/HEAD...`, and in fresh/cloud containers that ref is often absent (clone doesn't set it), which makes the skill fail with `fatal: ambiguous argument 'origin/HEAD...'`. Point it at the integration branch before invoking the review:
+
+```bash
+git remote set-head origin develop 2>/dev/null || git remote set-head origin --auto 2>/dev/null || true
+```
+
+This also scopes the diff correctly: with `origin/HEAD → develop`, the review sees exactly this branch's changes, not the whole `develop..main` delta.
+
 After the code-review fixes are pushed, run `/security-review` on the branch's pending changes. This gate is **one-directional**: only an actual **finding** stops the flow. A clean result is **not** a checkpoint and **not** a place to pause.
 
 - **No security problems found** → continue **immediately** into step 6 in the **same** turn. Do **not** pause, do **not** wait for confirmation, and do **not** post a standalone "security review passed / all clear" message and then end your turn — that counts as a wrongful stop. A clean review is a pass-through; at most note it in one line on the way to step 6.
