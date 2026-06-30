@@ -33,6 +33,16 @@
 ## CI
 - CI_CHECK_NAME: CI          <!-- the PR check name work-on-issue / push-to-prod wait on before merge -->
 
+## Project board (optional — used by /issue-flow:work-on-issue step 1.5 to move the card to "In Progress")
+<!-- These mirror the GitHub repo variables that .github/workflows/project-status.yml reads
+     (PROJECT_ID, STATUS_FIELD_ID) plus the "In Progress" option id. Discover them with the
+     `gh api graphql` query shown in APPLY.md. Leave any of the three BLANK to disable the
+     early "In Progress" move — work-on-issue then skips step 1.5 with a warning and proceeds.
+     The Done/Production move on merge is handled by project-status.yml and is independent of these. -->
+- PROJECT_ID:                <!-- e.g. PVT_... ; same value as the PROJECT_ID repo variable -->
+- STATUS_FIELD_ID:           <!-- e.g. PVTSSF_... ; same value as the STATUS_FIELD_ID repo variable -->
+- OPTION_IN_PROGRESS:        <!-- single-select option id of the "In Progress" column -->
+
 ## Reviews (set each to `none` to skip that step)
 - CODE_REVIEW_SKILL: code-review:code-review   <!-- or `none` → reviewer does a plain self-review of the diff -->
 - SECURITY_REVIEW: /security-review            <!-- or `none` -->

@@ -121,6 +121,13 @@ Copy from `templates/` into the repo (merge where a file exists):
    (Use `organization(login:...)` instead of `user(...)` for an org project. Board columns should
    include `Develop` and `Production` to match the option lookups.)
 
+   To also have `/issue-flow:work-on-issue` flip the card to **In Progress** the moment work starts
+   (step 1.5, before branch/PR), fill the `## Project board` block in `.claude/flow.config.md` with
+   `PROJECT_ID` / `STATUS_FIELD_ID` (the same values as the repo variables above) and
+   `OPTION_IN_PROGRESS` (the "In Progress" option id from the same `fields(...)` query). This move is
+   driven locally by the command (so the board needs an "In Progress" column), is best-effort, and
+   self-skips if any of the three keys is blank — it does not touch the on-merge automation.
+
 ## Phase 7 — Deploy verification (only if `DEPLOY_VERIFY` ≠ `none`)
 
 The plugin ships `/issue-flow:verify-deploy` for **Dokploy**-hosted backends whose health endpoint

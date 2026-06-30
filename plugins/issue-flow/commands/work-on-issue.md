@@ -61,7 +61,42 @@ mcp__github__issue_read(method=get_comments, owner=<OWNER>, repo=<REPO>, issue_n
 
 Study **body + all comments** — they may contain scope refinement, AC changes, or intermediate decisions. From labels infer `<type>` for the branch: `feat` (label `type:feature`) or `fix` (label `type:bug`).
 
-Send the user **one short message** (3–6 lines): task, AC, approach, affected files. This is a notification, **not** a confirmation request — go straight to step 2.
+Send the user **one short message** (3–6 lines): task, AC, approach, affected files. This is a notification, **not** a confirmation request — go straight to step 1.5.
+
+### 1.5. Move the issue to "In Progress" on the project board (config-gated, best-effort)
+
+Right away — **before** the branch and PR exist — flip the issue's project card to **In Progress** so the board reflects that work has started. This complements `.github/workflows/project-status.yml`, which only moves cards to **Develop**/**Production** on merge; that on-merge behavior is independent and must stay untouched.
+
+Read `PROJECT_ID`, `STATUS_FIELD_ID`, and `OPTION_IN_PROGRESS` from `.claude/flow.config.md` (the `## Project board` block).
+
+- **Graceful skip:** if any of the three is missing or blank, print one line — `Project board not configured (PROJECT_ID/STATUS_FIELD_ID/OPTION_IN_PROGRESS) — skipping In Progress move.` — and go straight to step 2. **Never** let this block the flow.
+
+Otherwise run the GraphQL via `gh api graphql` (a project-board mutation, not a PR/issue op, so it is outside the "only `mcp__github__*`" rule — a deliberate scoped exception, like the `gh`-based code review in step 5.5). This mirrors `project-status.yml`: resolve the issue node id, ensure the issue is on the board, then set the status field.
+
+```bash
+set -euo pipefail
+
+ISSUE_NODE_ID=$(gh api graphql \
+  -f query='query($owner:String!,$repo:String!,$num:Int!){repository(owner:$owner,name:$repo){issue(number:$num){id}}}' \
+  -f owner=<OWNER> -f repo=<REPO> -F num=$ARGUMENTS \
+  --jq '.data.repository.issue.id')
+
+ITEM_ID=$(gh api graphql \
+  -f query='mutation($p:ID!,$c:ID!){addProjectV2ItemById(input:{projectId:$p,contentId:$c}){item{id}}}' \
+  -f p=<PROJECT_ID> -f c="$ISSUE_NODE_ID" \
+  --jq '.data.addProjectV2ItemById.item.id')
+
+gh api graphql \
+  -f query='mutation($p:ID!,$i:ID!,$f:ID!,$o:String!){updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$o}}){projectV2Item{id}}}' \
+  -f p=<PROJECT_ID> -f i="$ITEM_ID" -f f=<STATUS_FIELD_ID> -f o=<OPTION_IN_PROGRESS> \
+  > /dev/null
+
+echo "Issue #$ARGUMENTS moved to In Progress."
+```
+
+`addProjectV2ItemById` is idempotent — re-running on an issue already on the board just returns its existing item id, so resuming `/work-on-issue` is safe.
+
+This step is **best-effort**: if the call fails (e.g. the local `gh` token lacks `project` scope, or the option id is stale), print a one-line warning and **continue to step 2** anyway — a board hiccup must not stop the actual work.
 
 ### 2. Branch from `develop`
 
