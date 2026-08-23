@@ -1,5 +1,5 @@
 {
-  "//": "Example .claude/settings.json for the issue-driven flow. The `permissions.allow` list pre-approves the read + git + GitHub-MCP calls the skills make, so the autonomous runs don't stop on permission prompts. Trim the Bash(...) tooling entries to YOUR stack (the ones below assume Python/uv + Node/npm). `defaultMode: acceptEdits` lets file edits through without prompts; drop it if you want stricter control.",
+  "//": "Example .claude/settings.json for the issue-driven flow. The `permissions.allow` list pre-approves the read + git + GitHub-MCP calls the skills make, so the autonomous runs don't stop on permission prompts. The narrow `gh` entries cover the three exceptions the commands document inline (arming auto-merge, which MCP cannot do; the project-board GraphQL mutation; creating the flow's labels) — note `Bash(gh pr merge --auto:*)` deliberately does NOT allow a bare `gh pr merge`, so nothing here can merge a PR ahead of the CI gate. Trim the Bash(...) tooling entries to YOUR stack (the ones below assume Python/uv + Node/npm). `defaultMode: acceptEdits` lets file edits through without prompts; drop it if you want stricter control.",
   "permissions": {
     "allow": [
       "Read",
@@ -30,6 +30,12 @@
       "Bash(git rev-parse:*)",
       "Bash(git remote:*)",
       "Bash(cd:*)",
+      "Bash(git ls-remote:*)",
+
+      "Bash(gh pr merge --auto:*)",
+      "Bash(gh api graphql:*)",
+      "Bash(gh label create:*)",
+      "Bash(gh pr view:*)",
 
       "Bash(uv:*)",
       "Bash(uv run:*)",

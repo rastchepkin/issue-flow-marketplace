@@ -1,6 +1,6 @@
 ---
 description: Discussion → GitHub issue (English, by template, no duplicates). Default: product review (UX + plan/AC sign-off); -auto creates straight away.
-argument-hint: "[short task description] [-auto]"
+argument-hint: "[short task description] [-auto] [-backlog]"
 model: sonnet
 ---
 
@@ -13,6 +13,7 @@ Before any `mcp__github__*` call, resolve `<OWNER>` and `<REPO>` from `git remot
 `$ARGUMENTS` is the task description plus an optional flag. Parse it:
 
 - **`-auto`** — autonomous mode: skip the UX step, the discussion, and the sign-off; if the context is clear, create the issue straight away (the behavior this command used to have by default). Use it for small/obvious tasks and unattended runs.
+- **`-backlog`** — mark the issue as "needed, but not now": create it with the `BACKLOG_LABEL` label (default `status:backlog`) so it does not enter the active queue. This is the **default under `-auto`** — an unattended run should not silently fill the queue — and **off by default** in product-review mode, where the sign-off (step 0.3) asks explicitly.
 - **no flag (default)** — **product-review mode**: explore the UX when the change touches the frontend, discuss the change with the user, and present a product-change plan + AC for sign-off **before** creating the issue. Use it for anything a manager should approve first.
 
 Strip the flag from the text; the remaining words are the task description.
@@ -23,6 +24,7 @@ This command ships in the shared `issue-flow` plugin, so its body is stack-agnos
 
 - branch names → `DEV_BRANCH` / `PROD_BRANCH` (the literals `develop` / `main` in this file are placeholders)
 - the bug-report Environment section → list this project's actual runtime, not `Python, Django, Node`
+- backlog label → `BACKLOG_LABEL` (default `status:backlog`; blank disables the backlog marking entirely)
 - user-facing chat language → `USER_LANGUAGE`
 
 If `.claude/flow.config.md` is missing, stop and ask the user to create it from the plugin's `templates/flow.config.example.md`.
@@ -69,9 +71,14 @@ UX (если был /ux-explore)
 ВНЕ ЗАДАЧИ
 <что сознательно не делаем сейчас>
 
+КОГДА
+Берём сейчас (Todo) / кладём в бэклог на потом (Backlog) — <твоя рекомендация в полстроки>
+
 —————
 Ок заводить задачу с этим планом? Или что поправить?
 ```
+
+The **КОГДА** line is what decides the backlog label: "в бэклог" → create with `BACKLOG_LABEL`, "берём сейчас" → create without it. An explicit `-backlog` flag pre-fills the recommendation but the user's answer still wins.
 
 On "ок" → proceed to step 2 with the agreed plan/AC as the basis for the body. On edits → revise and re-confirm. The English issue body (steps 4–5) must match what was approved here.
 
@@ -97,6 +104,8 @@ Before drafting the body, build a picture of "what is already done / in progress
 ```
 mcp__github__list_issues(owner=<OWNER>, repo=<REPO>, state=open, perPage=50)
 ```
+
+Separate the results by `BACKLOG_LABEL`: issues carrying it are parked ("needed, but not now"), issues without it are the active queue. A near-duplicate sitting in the backlog is not a reason to drop the new task — it may be the moment to promote the old one instead, which is a user decision worth raising in step 3.6.
 
 **3.2. Similar closed issues** — what has already been done on this topic:
 
@@ -196,14 +205,18 @@ mcp__github__issue_write(
   repo=<REPO>,
   title=<title>,
   body=<body>,
-  labels=["type:feature"]  // or ["type:bug"]
+  labels=["type:feature"]  // or ["type:bug"]; append <BACKLOG_LABEL> when the issue goes to the backlog
 )
 ```
 
-Return the user the number and URL of the created issue in one line.
+**Backlog label.** Append `BACKLOG_LABEL` to `labels` when the issue is not being taken up now — i.e. when the step-0.3 **КОГДА** answer was "в бэклог", or when `-backlog` was passed, or when running under `-auto` without an explicit "берём сейчас". Skip it if `BACKLOG_LABEL` is blank in the config. The label must exist in the repo; if `issue_write` rejects it as unknown, create it once via `gh label create <BACKLOG_LABEL> --color ededed --description "Needed, but not scheduled yet"` and retry (a label mutation, not a PR/issue op — the same kind of scoped `gh` exception the sibling commands use).
+
+`/issue-flow:work-on-issue` removes this label at its step 1.5 when the issue is actually taken into work, so a board view filtered on `-label:<BACKLOG_LABEL>` shows exactly the active queue.
+
+Return the user the number and URL of the created issue in one line, and say which queue it landed in (Todo or Backlog).
 
 ## Forbidden
 
 - Do not create files in `.claude/plans/`, `notes/` (for an active task), or `*-plan.md` at the repo root. The plan lives **only** in the issue body.
-- Do not use `gh issue create` — only `mcp__github__issue_write`.
+- Do not use `gh issue create` — only `mcp__github__issue_write`. The one scoped `gh` exception is creating a missing `BACKLOG_LABEL` (step 5), which is a label mutation, not an issue operation.
 - Under `-auto`, do not show a preview before creation when the discussion is clear — that mode is autonomous. (Default mode is the opposite: the step 0.3 sign-off is required before creating.)

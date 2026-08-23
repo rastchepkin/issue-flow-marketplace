@@ -1,6 +1,6 @@
 ---
 description: Autonomously drive an issue to merge into develop and publish a report — no per-step confirmations
-argument-hint: "<issue-number> [-bypass-low | -bypass]"
+argument-hint: "<issue-number> [-ask | -bypass]"
 model: opus
 ---
 
@@ -13,22 +13,26 @@ Before any `mcp__github__*` call, resolve `<OWNER>` and `<REPO>` from `git remot
 `$ARGUMENTS` carries the issue number plus optional flags. Parse it once, up front:
 
 - **`<N>`** — the single positive integer in `$ARGUMENTS`. **Everywhere below, `$ARGUMENTS` used as an issue number means `<N>`** (flags stripped) — in `#$ARGUMENTS`, `issue_number=$ARGUMENTS`, the branch name, `Closes #$ARGUMENTS`, and the `/report $ARGUMENTS` hand-off. If no integer is present, stop and ask.
-- **flags** — tokens starting with `-`. Only these are recognized; they relax the **existing-test gate** (step 3.6) and nothing else:
-  - **`-bypass-low`** — auto-accept existing-test changes when **every** changed test group is **Low** risk; still stop and ask if any group is **Medium** or **High**.
-  - **`-bypass`** — auto-accept **all** existing-test changes regardless of risk; never pause at the gate.
-  - none (default) — current behavior: any edit/deletion of an existing test stops and asks.
+- **flags** — tokens starting with `-`. Only these are recognized; they change the **existing-test gate** (step 3.6) and nothing else:
+  - **none (default)** — the gate runs the **test-change judge** (an isolated sub-agent). `low` risk is auto-accepted and recorded; `medium`/`high` stops and asks.
+  - **`-ask`** — skip the judge; **any** edit or deletion of an existing test stops and asks. The strict pre-judge behavior, for work on critical code.
+  - **`-bypass`** — auto-accept **all** existing-test changes regardless of the judge's verdict; never pause at the gate. For fully unattended runs.
+  - **`-bypass-low`** — deprecated alias for the default (the judge already auto-accepts exactly the low-risk changes this flag used to cover). Accept it silently; do not error.
 
-The bypass flags affect **only** the existing-test gate. Every other "stop and ask" fork in the Mode section (merge conflict, unfixable CI, AC ambiguity, scope expansion, security finding) still escalates exactly as before — `-bypass` does **not** silence those.
+The flags affect **only** the existing-test gate. Every other "stop and ask" fork in the Mode section (merge conflict, unfixable CI, AC ambiguity, scope expansion, security finding) still escalates exactly as before — `-bypass` does **not** silence those, and the step-3.6 **deny-list** overrides `-bypass` as documented in that step.
 
 ## Project config — read this first
 
 This command ships in the shared `issue-flow` plugin, so its body is stack-agnostic. The project-specific values live in **`.claude/flow.config.md`** at the repo root. **Read that file before acting** and substitute its values wherever this command shows a placeholder literal:
 
 - branch names → `DEV_BRANCH` / `PROD_BRANCH` (the literals `develop` / `main` in this file are placeholders)
-- gate commands → `TEST_CMD`, `LINT_CMD`, `FORMAT_CMD`, `TYPECHECK_CMD`, and the `FE_*` gates (literals like `uv run pytest`, `uv run mypy`, `npm run …` are placeholders)
+- gate commands → `TEST_CMD`, `LINT_CMD`, `FORMAT_CMD`, `TYPECHECK_CMD`, and the `FE_*` gates (literals like `uv run pytest` are placeholders)
 - e2e location → `E2E_PATH` (skip every e2e instruction if it is `none`)
 - CI check to wait on → `CI_CHECK_NAME`
 - review steps → `CODE_REVIEW_SKILL` / `SECURITY_REVIEW` (skip a step whose value is `none`)
+- test-change judge → `TEST_JUDGE`, `TEST_JUDGE_MODEL`, `TEST_PROTECTED_PATHS` (step 3.6)
+- backlog label → `BACKLOG_LABEL` (step 1.5)
+- merge strategy → `AUTO_MERGE` (step 6)
 - deploy verification → run step 8.5 only if `DEPLOY_VERIFY` is not `none`, dispatching `DEPLOY_VERIFY_SKILL`
 - user-facing chat language → `USER_LANGUAGE` (any "(currently Russian)" note below is a placeholder)
 
@@ -45,10 +49,14 @@ This is an **autonomous flow** in the spirit of a Replit-style agent. By default
 - red tests/linter that could not be fixed in 2–3 iterations;
 - request for an action outside issue scope (new DB migrations, removal of public API, CI/infra changes);
 - CI check failed for a reason that cannot be fixed by a local patch (e.g., secrets/environment);
-- **modification or deletion of existing tests** — a change to guardrails, gated at step 3.6. By default an explicit confirmation is required; the `-bypass-low` / `-bypass` flags relax this gate (see Arguments and step 3.6). Adding new tests is fine, no confirmation needed.
-- **`/security-review` flagged a security problem** (see step 5.6) — never auto-fix-and-merge a security finding; surface it to the user and stop. Only an **actual finding** is the fork: a **clean** security review is **not** a stop point — it is a pass-through, keep going to CI/merge in the same turn without pausing.
+- **modification or deletion of existing tests judged `medium`/`high` risk**, or hitting the deny-list — gated at step 3.6. Adding new tests is always fine, no confirmation needed.
+- **the security review flagged a security problem** (see step 5.6) — never auto-fix-and-merge a security finding; surface it to the user and stop. Only an **actual finding** is the fork: a **clean** security review is **not** a stop point — it is a pass-through, keep going to CI/merge in the same turn without pausing.
 
 In all other cases — proceed to the end without pauses.
+
+## Resume — this command is idempotent
+
+A session can die, be interrupted, or go dormant mid-flow (common in cloud/web environments during the CI wait). Re-invoking `/issue-flow:work-on-issue $ARGUMENTS` must therefore **never start over** — step 2 detects how far the previous run got and re-enters at the right step. There is no separate "finish" command: the same invocation both starts and resumes.
 
 ## Steps
 
@@ -61,13 +69,23 @@ mcp__github__issue_read(method=get_comments, owner=<OWNER>, repo=<REPO>, issue_n
 
 Study **body + all comments** — they may contain scope refinement, AC changes, or intermediate decisions. From labels infer `<type>` for the branch: `feat` (label `type:feature`) or `fix` (label `type:bug`).
 
-Send the user **one short message** (3–6 lines): task, AC, approach, affected files. This is a notification, **not** a confirmation request — go straight to step 1.5.
+While reading the comments, note whether a **`/report` comment already exists** (a comment whose body starts with `## What was done`) — step 2 needs that signal.
 
-### 1.5. Move the issue to "In Progress" on the project board (config-gated, best-effort)
+Send the user **one short message** (3–6 lines): task, AC, approach, affected files. This is a notification, **not** a confirmation request — go straight to step 1.5. On a **resume** (step 2 finds existing work), replace it with one line saying where you are picking up.
+
+### 1.5. Move the issue to "In Progress" and clear the backlog label (config-gated, best-effort)
 
 Right away — **before** the branch and PR exist — flip the issue's project card to **In Progress** so the board reflects that work has started. This complements `.github/workflows/project-status.yml`, which only moves cards to **Develop**/**Production** on merge; that on-merge behavior is independent and must stay untouched.
 
-Read `PROJECT_ID`, `STATUS_FIELD_ID`, and `OPTION_IN_PROGRESS` from `.claude/flow.config.md` (the `## Project board` block).
+**Clear the backlog label first.** Read `BACKLOG_LABEL` from `.claude/flow.config.md` (default `status:backlog`). That label means "needed, but not now"; taking the issue into work makes it false. Removing it is what keeps a board view filtered on `-label:<BACKLOG_LABEL>` honest:
+
+```
+mcp__github__issue_write(method=update, owner=<OWNER>, repo=<REPO>, issue_number=$ARGUMENTS, labels=[<the issue's current labels, minus BACKLOG_LABEL>])
+```
+
+Skip silently if the label is absent, if `BACKLOG_LABEL` is blank, or if the update fails — best-effort, never blocking.
+
+Then the board move. Read `PROJECT_ID`, `STATUS_FIELD_ID`, and `OPTION_IN_PROGRESS` from `.claude/flow.config.md` (the `## Project board` block).
 
 - **Graceful skip:** if any of the three is missing or blank, print one line — `Project board not configured (PROJECT_ID/STATUS_FIELD_ID/OPTION_IN_PROGRESS) — skipping In Progress move.` — and go straight to step 2. **Never** let this block the flow.
 
@@ -98,12 +116,39 @@ echo "Issue #$ARGUMENTS moved to In Progress."
 
 This step is **best-effort**: if the call fails (e.g. the local `gh` token lacks `project` scope, or the option id is stale), print a one-line warning and **continue to step 2** anyway — a board hiccup must not stop the actual work.
 
-### 2. Branch from `develop`
+### 2. Detect where to resume, then branch from `develop`
+
+**First, look for existing work on this issue.** Never assume a clean slate:
 
 ```bash
-git fetch origin develop
-git checkout develop
-git pull --ff-only origin develop
+git fetch origin <DEV_BRANCH>
+git ls-remote --heads origin | grep -E "refs/heads/(feat|fix)/$ARGUMENTS-" || true
+```
+
+If a remote branch matches, read its PR (and whether it merged):
+
+```
+mcp__github__list_pull_requests(owner=<OWNER>, repo=<REPO>, head=<OWNER>:<branch>, state=all)
+```
+
+Combine that with the report-comment signal from step 1 and re-enter at the matching step:
+
+| Observed state | Re-enter at |
+|---|---|
+| no remote branch, no PR | **step 2** below — create the branch |
+| remote branch, no PR | checkout the branch, **step 3** — finish the work |
+| PR **open**, no code-review comment on it | **step 5.5** |
+| PR **open**, code-review comment present | **step 5.6** (the security review always re-runs on resume — it leaves no artifact to detect, and re-running a hard gate is the safe direction) |
+| PR **merged**, no `/report` comment on the issue | **step 8** |
+| PR **merged**, `/report` comment present | nothing to do — tell the user in one line and exit |
+
+Detect the code-review comment via `mcp__github__pull_request_read(method=get_comments, …)`. When resuming onto an existing branch, `git checkout <branch> && git pull --ff-only origin <branch>` first, and do **not** re-run steps the table says are already done.
+
+**Clean slate — create the branch:**
+
+```bash
+git checkout <DEV_BRANCH>
+git pull --ff-only origin <DEV_BRANCH>
 git checkout -b <type>/$ARGUMENTS-<kebab-summary>
 ```
 
@@ -113,79 +158,158 @@ git checkout -b <type>/$ARGUMENTS-<kebab-summary>
 
 For each AC:
 
-1. **Red.** Failing test reflecting the criterion. `uv run pytest` fails for the expected reason.
-2. **Green.** Minimal implementation. `uv run pytest` green.
-3. **Refactor.** Cleanup without changing behavior. `uv run pytest` green again.
+1. **Red.** Failing test reflecting the criterion. `TEST_CMD` fails for the expected reason.
+2. **Green.** Minimal implementation. `TEST_CMD` green.
+3. **Refactor.** Cleanup without changing behavior. `TEST_CMD` green again.
 
-After all AC — full run:
+After all AC — a full run of every gate configured in `.claude/flow.config.md`:
 
 ```bash
-uv run pytest
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy --strict src
+<TEST_CMD>
+<LINT_CMD>
+<FORMAT_CMD>
+<TYPECHECK_CMD>
+# plus the FE_* gates if the change touches the frontend
 ```
 
-All four must be green before PR. If something is red — try to fix (up to 2–3 iterations). If you cannot — stop and ask.
+All configured gates must be green before PR. If something is red — try to fix (up to 2–3 iterations). If you cannot — stop and ask.
 
 ### 3.5. E2E check
 
-After green unit-TDD, assess e2e applicability.
+Skip this step entirely if `E2E_PATH` is `none`. Otherwise, after green unit-TDD, assess e2e applicability.
 
 **Applicable** if the task changes:
 
-- public API contract (new/changed DRF endpoint, serializer change, URL routing change);
-- request → view → ORM → response chain (new models, new DRF permissions/authentication, new middleware);
+- public API contract (new/changed endpoint, serializer change, URL routing change);
+- request → view → storage → response chain (new models, new permissions/authentication, new middleware);
 - frontend flow visible to the user (new screen, change to an existing one, change to API interaction).
 
-**Not applicable** (note in PR body as one line "E2E not applicable: <reason>"):
+**Not applicable** (note in the PR body as one line "E2E not applicable: <reason>"):
 
 - internal refactor without user-facing effect;
 - config/types/docs-only changes;
 - migrations with no new user-visible or API surface.
 
-**If applicable:**
+**If applicable:** the test must exercise the real stack end to end — real routing, real storage, no mocks of the layer under test — live under `E2E_PATH`, and be green before the PR. Run the e2e suite, then the full `TEST_CMD` again to be safe. Commit as a separate `test:` commit (or together with the `feat:` commit — your call, but e2e must be present in the PR diff).
 
-- Backend API e2e: test via `rest_framework.test.APIClient` against the real URL conf (with pytest-django migrations), no mocks. File: `backend/apps/<app>/tests/test_<feature>_api.py`.
-- Frontend UI e2e (once a separate suite exists): test of the screen's interaction with a mocked API via MSW or against a local backend. File: `frontend/src/<feature>/__tests__/<feature>.e2e.test.tsx`.
-2. The test must go through real HTTP POST via `send_update(...)` → pass through `build_app(...)` → touch DB/state → assert the effect via `fake_bot_session.captured_texts()` and/or `e2e_db_session`.
-3. Run: `uv run pytest tests/e2e/ -x` — must be green. Then full `uv run pytest` again to be safe.
-4. Commit as a separate `test:` commit (or together with the `feat:` commit — your call, but e2e must be present in the PR diff).
+### 3.6. Gate on existing test changes — deny-list, then judge
 
-### 3.6. Gate on existing test changes
+Tests are guardrails. **Adding** new tests never needs approval. **Editing or deleting an existing** test does, because it can silently remove coverage — but requiring a human for every such edit turns the gate into a rubber stamp at any real throughput. So the gate is two layers: a cheap deterministic **deny-list** that always escalates, and an isolated **judge sub-agent** for everything else.
 
-Tests are guardrails. Any **edit or deletion of existing** tests (unit or e2e) must be **explicitly confirmed by the user** before commit. Adding new tests passes without confirmation.
-
-After TDD and e2e iterations (steps 3 and 3.5), **before** committing test changes, compute the diff:
+Compute the test diff first (adapt the pathspecs to this project's test layout):
 
 ```bash
-git diff develop... --stat -- '**/test_*.py' '**/*.test.*' '**/*.test.tsx' '**/tests/**' 'frontend/**/__tests__/**'
+git diff <DEV_BRANCH>... --stat -- '**/test_*.py' '**/*_test.go' '**/*.test.*' '**/tests/**' '**/__tests__/**' '**/conftest.py'
+git diff <DEV_BRANCH>...      -- '**/test_*.py' '**/*_test.go' '**/*.test.*' '**/tests/**' '**/__tests__/**' '**/conftest.py'
 ```
 
-If the diff contains **deleted** test files, **renamed** or **modified** existing test cases (including `pytest.mark.skip`/`xfail` on a previously passing test), this gate engages. First **classify each changed test group's risk** (`Низко` / `Средне` / `Высоко`) using the same judgment the report template below asks for. Then decide how to proceed **based on the flags parsed in Arguments**:
+If it contains **only additions** — new test files, or new test cases in existing files — the gate does not engage. Commit normally and go to step 4.
 
-- **default (no flag)** — stop and post the report below; **wait for explicit confirmation** before committing the test changes.
-- **`-bypass-low`** — if **every** changed group is `Низко`, auto-accept (commit without waiting) and post the same cards as a **non-blocking** note prefixed `Изменения тестов приняты автоматически (риск низкий, флаг -bypass-low):`. If **any** group is `Средне`/`Высоко`, fall back to the default: post the report and **wait**.
-- **`-bypass`** — auto-accept **all** changed groups regardless of risk; commit without waiting and post the same cards as a **non-blocking** note prefixed `Изменения тестов приняты автоматически (флаг -bypass):` so the change stays visible for later review.
+#### 3.6a. Deny-list — always escalates to the user
 
-When changes are auto-accepted (either bypass path), do **not** wait for a reply — but still emit the cards (so the user can review after the fact) and still list every modified/deleted test in the PR body's "Test changes" section (step 5). Auto-acceptance never applies to a brand-new behavior that contradicts the issue AC — if a test change implies the AC itself is wrong, that is an AC ambiguity fork (Mode), not a test-gate decision, and it escalates regardless of `-bypass`.
+These are cheap to detect and too expensive to get wrong, so they **never** depend on a model's judgment and are **not** relaxed by `-bypass`:
+
+- an **entire test file deleted**;
+- `skip` / `xfail` / `.skip` / `.only` / `t.Skip` added to a test that was previously passing;
+- a changed test file that lies **outside the modules this issue's source diff touches** — including shared fixtures, `conftest.py`, and test helpers. A test being edited far from the code being changed is the classic silent-coverage-loss shape;
+- any changed test matching `TEST_PROTECTED_PATHS` from `.claude/flow.config.md` (auth, permissions, billing, migrations — whatever this project declares untouchable).
+
+Any hit → force that group's risk to `high` and go straight to the user report in 3.6c, naming **which** deny-list rule fired.
+
+#### 3.6b. The judge sub-agent
+
+For every remaining changed group, dispatch **one isolated sub-agent** (`subagent_type=claude`, `model=<TEST_JUDGE_MODEL>`, default `opus`). If `TEST_JUDGE` is not `on`, skip the judge and treat the gate as `-ask`.
+
+The judge must be **blind to the implementer's reasoning** — pass it facts only. Told why the change is fine, it will agree; the whole point of a separate agent is that it derives necessity itself. Give it the issue, the test diff, and the **source** diff — the source diff is what separates "the assertion was adapted to a new signature" from "the assertion got weaker":
+
+```
+Agent(
+  subagent_type="claude",
+  model="<TEST_JUDGE_MODEL>",
+  description="Judge test changes",
+  prompt="<the prompt below>"
+)
+```
+
+```
+You are an independent reviewer of TEST changes on a feature branch. You are read-only: do not edit, commit, or push. Running the test suite to check a claim is allowed.
+
+You are NOT told why the author made these changes, and you must not ask. Derive from the evidence alone whether each change is a necessary consequence of the task, or an erosion of a guardrail.
+
+Evidence:
+1. The issue (the task's contract):
+<issue body + all comments, verbatim>
+2. The diff of TEST files:
+<test diff, verbatim>
+3. The diff of SOURCE files (non-test) on the same branch:
+<source diff, verbatim>
+
+Group the test changes the way a reader would — by file or by feature, not per micro-assert. For each group, judge three axes:
+
+A. ac_fit — does this test change follow necessarily from the issue's acceptance criteria?
+   in-scope        the AC require exactly this change
+   out-of-scope    the change is not required by any AC (gold-plating or drift)
+   contradicts-ac  it encodes behavior the issue does not ask for, or contradicts a decision recorded in the issue
+
+B. coverage — what happens to the guarantee the test used to give?
+   preserved  the same property is still asserted, mechanically adapted (rename, signature, moved import)
+   narrowed   a case, branch, or assertion was dropped; a matcher got looser
+   removed    the property is no longer checked anywhere
+
+C. blast_radius — does the touched test guard behavior beyond this issue?
+   this-feature-only   it only covers what this issue changes
+   touches-adjacent    it is also the guardrail for behavior this issue does not touch
+
+Additional rule — behavior-preserving source changes. If the source diff is a pure refactor (rename / move / extract, no semantic change) but a test's assertions change MEANING, that is at least `medium` regardless of the axes above: a refactor by definition should not need different expectations.
+
+Risk = the worst of the three axes. `preserved` + `in-scope` + `this-feature-only` is `low`. Anything `removed`, `contradicts-ac`, or `touches-adjacent` is at least `medium`. **When you are unsure, return `medium`, never `low`.** Being wrong toward escalation costs a question; being wrong toward acceptance costs a silent hole in the suite.
+
+Return exactly one JSON object as your final message, nothing else:
+
+{"verdict":"low|medium|high",
+ "groups":[
+   {"name":"<plain-language group name, in <USER_LANGUAGE>>",
+    "files":["<path>", ...],
+    "ac_fit":"in-scope|out-of-scope|contradicts-ac",
+    "coverage":"preserved|narrowed|removed",
+    "blast_radius":"this-feature-only|touches-adjacent",
+    "risk":"low|medium|high",
+    "was":"<what the test checked before — one line, in <USER_LANGUAGE>, no jargon>",
+    "now":"<what it checks instead — one line, in <USER_LANGUAGE>, no jargon>",
+    "why":"<half a line: why this risk level; on medium/high, what would de-risk it>"}
+ ]}
+
+"verdict" is the worst risk across all groups.
+```
+
+#### 3.6c. Act on the verdict
+
+| Situation | What happens |
+|---|---|
+| deny-list hit | **always** report and wait, even under `-bypass` |
+| `-ask` flag | report and wait; the judge is not consulted |
+| verdict `low` | **auto-accept**: commit without waiting, emit the cards as a non-blocking note prefixed `Изменения тестов приняты автоматически (судья: риск низкий):` |
+| verdict `medium`/`high`, no `-bypass` | report and **wait** for explicit confirmation before committing |
+| verdict `medium`/`high`, `-bypass` | auto-accept, emit the cards prefixed `Изменения тестов приняты автоматически (флаг -bypass, судья: <verdict>):` |
+
+Auto-acceptance never applies when a test change implies the **AC itself is wrong** — that is an AC ambiguity fork (Mode), not a test-gate decision, and it escalates regardless of `-bypass`. Every accepted change, auto or confirmed, is still listed in the PR body's "Test changes" section (step 5) and in the `/report` comment, so nothing lands unrecorded.
 
 The report (and the non-blocking note) is a **user-facing chat message**, not a repo artifact, so write it in the **user's language** (currently Russian) and for a **non-engineer reader**:
 
 - **No jargon.** Forbidden words: "guardrail", "blob", "re-pin", "alias", "back-compat", "contract", "mirror". Say what they mean in plain words ("проверка формата", "версия резюме", "совместимость со старым импортом").
-- **One card per changed test group** (group by file or by feature, not one card per micro-assert). Each card has exactly three lines: what it checked, what changes, and how risky that is.
-- **Risk in plain words** — `Низко` / `Средне` / `Высоко` with a half-line why. On `Средне`/`Высоко`, name what you'll do to de-risk (e.g. "перепроверю формат отдельным тестом").
+- **One card per changed group** — render the judge's `name` / `was` / `now` / `why` verbatim; do not re-summarize them.
+- **Risk in plain words** — `Низко` / `Средне` / `Высоко`. On `Средне`/`Высоко`, name what you'll do to de-risk.
 - **Open questions go last, separately** — only the decisions that actually block you, each as a simple either/or **with your recommendation**. Do not interleave them into the cards.
 
 Template (fill in, keep this shape and language):
 
 ```markdown
-Меняю N групп тестов. По каждой — что проверяла, что меняю, опасно ли.
+Меняю N групп тестов. Судья: <вердикт>. По каждой — что проверяла, что меняю, опасно ли.
 
-ТЕСТ 1 — <человеческое имя группы, напр. «проверка резюме в API»>
- Было: <что проверял тест, 1 строка простыми словами>
- Меняю: <что станет вместо этого, 1 строка>
- Опасно? <Низко/Средне/Высоко> — <короткое почему; на Средне/Высоко — что сделаю, чтобы подстраховаться>
+ТЕСТ 1 — <name из вердикта судьи>
+ Было: <was>
+ Меняю: <now>
+ Опасно? <Низко/Средне/Высоко> — <why>
 
 ТЕСТ 2 — …
  …
@@ -198,11 +322,9 @@ Template (fill in, keep this shape and language):
 Подтверди изменения тестов — или скажи, что поправить.
 ```
 
-On the **default / waiting** path: wait for explicit confirmation, and after "yes" — commit test changes as a **separate** `test:` commit (or several, if logically distinct), so guardrail edits read at a glance in `git log`. On an **auto-accepted** path (`-bypass`, or `-bypass-low` with all-`Низко` groups): commit the same way **without** waiting, right after emitting the non-blocking note.
+On the **waiting** path: after "yes" — commit test changes as a **separate** `test:` commit (or several, if logically distinct), so guardrail edits read at a glance in `git log`. On an **auto-accepted** path: commit the same way **without** waiting, right after emitting the non-blocking note.
 
 If the user refuses (waiting path only) — reconsider the approach: maybe the new behavior should coexist with the old, or the AC is formulated incorrectly.
-
-Entirely **new** tests (new files or new functions in existing files) — this gate does not apply, they go in a regular `test:`/`feat:` commit.
 
 ### 4. Commit and push
 
@@ -222,7 +344,7 @@ Do not use `git add -A` / `git add .` — uncommitted out-of-scope changes (e.g.
 mcp__github__create_pull_request(
   owner=<OWNER>,
   repo=<REPO>,
-  base=develop,
+  base=<DEV_BRANCH>,
   head=<type>/$ARGUMENTS-<kebab-summary>,
   title=<English title, to the point>,
   body=<see below>
@@ -240,17 +362,15 @@ Closes #$ARGUMENTS
 ## Test changes
 <one of:>
 - Only new tests added; existing tests not touched.
-- Existing tests modified/deleted (gate per step 3.6 — confirmed by user, or auto-accepted via `-bypass-low`/`-bypass`; state which and the risk):
-  - `path/to/test_file.py::test_name` — deleted / rewritten / skipped. Risk: low/medium/high. Reason: <…>
+- Existing tests modified/deleted (gate per step 3.6 — state the judge's verdict and how it was accepted):
+  - `path/to/test_file.py::test_name` — deleted / rewritten / skipped. Judge: low|medium|high (<ac_fit>, <coverage>, <blast_radius>). Accepted: automatically / confirmed by user / `-bypass`. Reason: <…>
   - …
 
 ## Checklist
 - [x] TDD: red → green → refactor completed
-- [x] `pytest` green (including `tests/e2e/`)
-- [x] `ruff check .` clean
-- [x] `mypy --strict` clean
+- [x] All configured gates green (tests, lint, format, typecheck, e2e)
 - [x] E2E test added/updated OR noted "E2E not applicable: <reason>"
-- [x] Existing-test changes confirmed by user / auto-accepted via `-bypass`/`-bypass-low` OR existing tests not touched
+- [x] Existing-test changes judged and recorded OR existing tests not touched
 - [ ] docs/README updated if needed
 ```
 
@@ -258,84 +378,116 @@ Closes #$ARGUMENTS
 
 Save the PR number (`<PR>`) for the next steps.
 
-### 5.5. Code review — one round of fixes
+### 5.5 + 5.6. Reviews — two isolated sub-agents, dispatched in parallel
 
-After the PR is open, run a code review on it and reconcile the findings against the issue plan. **Exactly one** round of fixes — do **not** loop review → fix → review.
+Code review and security review are independent read-only passes over the same diff, and both produce a lot of output that must not land in this flow's context. Run **both as sub-agents, in a single message, so they execute concurrently** — that also keeps the pre-CI phase short, which matters for step 6.
 
-1. Invoke the `code-review:code-review` skill on the just-opened `<PR>`. It runs a multi-agent review of the PR, filters to high-confidence findings, and posts the result as a PR comment via `gh` — read that comment for the findings. (This is a deliberate, user-chosen exception to the repo's "only `mcp__github__*`" rule, scoped to this review step.)
-2. **Reconcile each finding against the issue (body + comments) — the plan is the source of truth.** A finding is **adequate** (→ fix it) when it is a real, in-scope defect or a violation of `CLAUDE.md` / the issue's AC. A finding is **rejected** (→ skip, note why) when it:
-   - asks for behavior or scope **not** in the issue AC (that is follow-up, not this task);
-   - contradicts an explicit decision recorded in the issue body/comments;
-   - is a pre-existing issue on lines this PR did not touch;
-   - is a stylistic nitpick a linter/typechecker/CI already covers.
-3. Apply fixes for the **adequate** findings only. Keep the TDD discipline: if a fix changes behavior, add/adjust a test first (the step 3.6 gate on **existing**-test edits still applies). Re-run the relevant local gates (`uv run pytest`, `ruff`, `mypy`, and the frontend gates if FE changed).
-4. Commit the fixes as a focused `fix:`/`refactor:` commit and `git push` to the same branch. The push re-triggers CI, which step 6 waits on.
-5. If there were **no** findings, or all findings were rejected — note that in one line and proceed; no commit needed.
-
-This is **one** round. Do not re-run `code-review:code-review` after applying the fixes — go straight to the security gate.
-
-### 5.6. Security review — hard gate before merge
-
-First make sure `origin/HEAD` resolves — `/security-review` diffs against `origin/HEAD...`, and in fresh/cloud containers that ref is often absent (clone doesn't set it), which makes the skill fail with `fatal: ambiguous argument 'origin/HEAD...'`. Point it at the integration branch before invoking the review:
+First make `origin/HEAD` resolve. The security review diffs against `origin/HEAD...`, and in fresh/cloud containers that ref is often absent (clone doesn't set it), which makes it fail with `fatal: ambiguous argument 'origin/HEAD...'`. Point it at the integration branch **before** dispatching, so both sub-agents see exactly this branch's changes rather than the whole `develop..main` delta:
 
 ```bash
-git remote set-head origin develop 2>/dev/null || git remote set-head origin --auto 2>/dev/null || true
+git remote set-head origin <DEV_BRANCH> 2>/dev/null || git remote set-head origin --auto 2>/dev/null || true
 ```
 
-This also scopes the diff correctly: with `origin/HEAD → develop`, the review sees exactly this branch's changes, not the whole `develop..main` delta.
+Then dispatch. Skip either sub-agent whose skill is `none` in `.claude/flow.config.md` (`CODE_REVIEW_SKILL` / `SECURITY_REVIEW`); if `CODE_REVIEW_SKILL` is `none`, do a plain self-review of the diff inline instead.
 
-After the code-review fixes are pushed, run `/security-review` on the branch's pending changes. This gate is **one-directional**: only an actual **finding** stops the flow. A clean result is **not** a checkpoint and **not** a place to pause.
-
-- **No security problems found** → continue **immediately** into step 6 in the **same** turn. Do **not** pause, do **not** wait for confirmation, and do **not** post a standalone "security review passed / all clear" message and then end your turn — that counts as a wrongful stop. A clean review is a pass-through; at most note it in one line on the way to step 6.
-- **Any security problem found** → **stop. Do not wait for CI, do not merge, do not run `/report`, do not wrap up the issue.** Escalate to the user in chat and end the autonomous flow there.
-
-**Never wait by polling for the review result.** Both `/security-review` and `code-review` return their result **synchronously** from the skill invocation itself — the moment the call returns, you have the verdict. Do **not** spawn a background `Bash`/`sleep` loop, and do **not** create a "wait until the agent(s) post their result" task: there is nothing to wait for, and a background bash wait **dies when the container is reclaimed**, leaving a task stuck as "running" forever and hanging the whole flow. The only legitimate wait in this flow is the inline CI poll in step 6.
-
-The escalation is a **user-facing chat message** — write it in the **user's language** (currently Russian), plain words, no jargon. For each finding: what is the risk, where (file/line), and a one-line suggested fix. Make clear the PR is open but **deliberately not merged** pending the user's decision, and that resuming means re-running `/work-on-issue $ARGUMENTS` (or telling you how to handle each finding). Leave the branch and PR as-is — do not close them.
-
-A security finding is a **real fork** (see Mode): the agent does not silently auto-fix security issues and then merge — the user must see them first.
-
-### 6. Wait for green CI
-
-The CI check to wait on is named `CI_CHECK_NAME` (from `.claude/flow.config.md`; default `CI`), triggered on `pull_request`. **Always** wait for it to pass **before** merge — even if everything is green locally.
-
-Poll status via MCP at ~30–45 second intervals (no faster) until all checks complete. Run this poll **inline** — repeated MCP calls within your own turn. **Never** offload the wait to a background `Bash`/`sleep` task: such waits die on container reclaim and leave the flow hanging (same reason as step 5.6).
+**On a resume** (step 2 routed you here with a code-review comment already on the PR): dispatch **only** the security sub-agent. The code review already ran and its one round of fixes is on the branch — re-running it would be a second round, which this step forbids. The security review always re-runs, because it leaves no artifact to detect and a stale pass is not a pass.
 
 ```
-mcp__github__pull_request_read(
-  method=get_status,
-  owner=<OWNER>,
-  repo=<REPO>,
-  pullNumber=<PR>
-)
+Agent(subagent_type="claude", model="sonnet", description="Code review PR",
+      prompt="<code-review prompt below>")
+Agent(subagent_type="claude", model="opus", description="Security review branch",
+      prompt="<security prompt below>")
 ```
 
-Possible outcomes:
+**Each sub-agent reconciles its own findings against the issue and returns only the conclusion.** This is what makes the isolation worth anything: if the parent had to read the raw findings in order to filter them, the review output would land in its context anyway.
 
-- **All checks success** → go to step 7.
-- **At least one failure** → read the failing job's logs, try to fix locally (up to 2–3 iterations: commit, push, wait for CI again). If you cannot — stop and ask the user.
-- **Stuck > 15 minutes in pending/queued** — stop, notify the user.
-
-### 7. Merge PR
-
-After green CI — squash merge via MCP:
+Code-review sub-agent prompt:
 
 ```
-mcp__github__merge_pull_request(
-  owner=<OWNER>,
-  repo=<REPO>,
-  pullNumber=<PR>,
-  merge_method=squash
-)
+Run the `<CODE_REVIEW_SKILL>` skill on PR #<PR> in the current repo. It runs a multi-agent review and posts its result as a PR comment via `gh` (a deliberate, scoped exception to this repo's "only mcp__github__*" rule).
+
+Then reconcile EVERY finding against the issue — the plan is the source of truth. Read it yourself:
+  mcp__github__issue_read(method=get, owner=<OWNER>, repo=<REPO>, issue_number=$ARGUMENTS)
+  mcp__github__issue_read(method=get_comments, owner=<OWNER>, repo=<REPO>, issue_number=$ARGUMENTS)
+
+A finding is `adequate` when it is a real, in-scope defect or a violation of CLAUDE.md / the issue's AC.
+A finding is `rejected` when it: asks for behavior not in the AC (that is follow-up); contradicts an explicit decision in the issue body/comments; is pre-existing on lines this PR did not touch; or is a stylistic nitpick a linter/typechecker/CI already covers.
+
+Do not fix anything. Return exactly one JSON object as your final message, nothing else:
+{"review":"code","findings":[{"file":"<path>","line":<n>,"severity":"high|medium|low","summary":"<one sentence>","fix":"<one-line suggested fix>","in_scope":"adequate|rejected","why":"<half a line, required when rejected>"}],"rejected_count":<n>}
 ```
 
-If merge fails due to a conflict with `develop` — stop and ask the user (this is a product fork).
+Security sub-agent prompt:
 
-After successful merge, sync `develop` locally:
+```
+Run the `<SECURITY_REVIEW>` review on the pending changes of the current branch in this repo. Read-only: do not edit or commit.
+
+Return exactly one JSON object as your final message, nothing else:
+{"review":"security","verdict":"clean|findings","findings":[{"file":"<path>","line":<n>,"severity":"critical|high|medium|low","risk":"<what an attacker gains — one sentence, plain words>","fix":"<one-line suggested fix>"}]}
+
+`verdict` is "clean" only when there is no finding at all.
+```
+
+**Act on the two results:**
+
+1. **Security first — it is a hard gate.**
+   - `verdict: clean` → continue **immediately** into the code-review fixes and then step 6, in the **same** turn. Do **not** pause, and do **not** post a standalone "security review passed" message and then end your turn — that counts as a wrongful stop. At most note it in one line on the way.
+   - `verdict: findings` → **stop. Do not merge, do not arm auto-merge, do not run `/report`.** Escalate to the user in chat and end the autonomous flow there. The escalation is a **user-facing chat message** in the user's language (currently Russian), plain words, no jargon: for each finding — what the risk is, where, and a one-line suggested fix. Make clear the PR is open but **deliberately not merged**, and that resuming means re-running `/issue-flow:work-on-issue $ARGUMENTS`. Leave the branch and PR as-is — do not close them. A security finding is a **real fork**: the agent does not silently auto-fix security issues and then merge.
+
+2. **Code review — exactly one round of fixes.** Apply fixes for the `adequate` findings only. Keep the TDD discipline: if a fix changes behavior, add or adjust a test first (the step-3.6 gate on **existing**-test edits still applies). Re-run the relevant local gates. Commit as a focused `fix:`/`refactor:` commit and `git push` to the same branch — the push re-triggers CI, which step 6 waits on. If there were no findings, or all were rejected, note that in one line and proceed; no commit needed. **Do not re-run the review after applying the fixes.**
+
+**Never poll for a review result.** Both sub-agents return their verdict **synchronously** — the moment the Agent call returns, you have it. Do **not** spawn a background `Bash`/`sleep` loop, and do **not** create a "wait until the agents post their result" task: there is nothing to wait for, and a background wait **dies when the container is reclaimed**, leaving the flow hanging forever.
+
+### 6. Green CI, then merge
+
+The CI check to wait on is named `CI_CHECK_NAME` (from `.claude/flow.config.md`; default `CI`), triggered on `pull_request`. A PR is **never** merged before it passes — even if everything is green locally.
+
+Which path you take depends on `AUTO_MERGE` in `.claude/flow.config.md`.
+
+#### 6a. `AUTO_MERGE: true` — hand the merge to GitHub (recommended)
+
+Sitting in a poll loop is what makes this flow fragile: in cloud/web sessions the turn goes dormant during the wait, and the merge then never happens until a human pokes the session. GitHub can do the merge itself the moment the required checks pass, with no agent alive:
 
 ```bash
-git checkout develop
-git pull --ff-only origin develop
+gh pr merge <PR> --auto --squash
+```
+
+(A `gh` call — like the code review and the board mutation, a deliberate, scoped exception to the "only `mcp__github__*`" rule, because the MCP merge tool cannot arm auto-merge.)
+
+> ⚠️ **Precondition, and it is not optional.** `--auto` only defers the merge if the base branch has **required status checks** configured in branch protection. With none configured, GitHub merges **immediately** — silently bypassing the CI gate. So right after arming it, read the PR once: if it is **already merged** while `CI_CHECK_NAME` is still pending or queued, that misconfiguration just fired. Say so plainly to the user — `auto-merge merged the PR before CI ran — <DEV_BRANCH> has no required status checks in branch protection; fix that before the next run` — and carry on to step 7. The merge cannot be undone, but the user must know the gate is not real.
+
+With auto-merge armed, poll `get_status` inline at ~30–45 second intervals for **at most ~10 minutes**, then take whichever branch applies:
+
+- **Merged within the window** → continue to step 7 in the same turn. This is the common case; nothing is lost.
+- **Still pending after ~10 minutes** → **end the turn cleanly.** Tell the user the PR is armed and will merge itself when CI goes green, and that re-running `/issue-flow:work-on-issue $ARGUMENTS` at any later point picks up at the report (step 2's resume table routes there). Do **not** keep polling, and do **not** offload the wait to a background task.
+- **A check fails** → auto-merge stays armed but will not fire. Read the failing job's logs and fix locally (up to 2–3 iterations: commit, push, re-poll). If you cannot — stop and ask the user.
+
+#### 6b. `AUTO_MERGE: false` — poll, then merge via MCP
+
+Poll status via MCP at ~30–45 second intervals (no faster) until all checks complete. Run this poll **inline** — repeated MCP calls within your own turn. **Never** offload the wait to a background `Bash`/`sleep` task: such waits die on container reclaim and leave the flow hanging.
+
+```
+mcp__github__pull_request_read(method=get_status, owner=<OWNER>, repo=<REPO>, pullNumber=<PR>)
+```
+
+- **All checks success** → merge now:
+
+  ```
+  mcp__github__merge_pull_request(owner=<OWNER>, repo=<REPO>, pullNumber=<PR>, merge_method=squash)
+  ```
+
+- **At least one failure** → read the failing job's logs, fix locally (up to 2–3 iterations: commit, push, wait for CI again). If you cannot — stop and ask the user.
+- **Stuck > 15 minutes in pending/queued** → stop and notify the user. Re-running the command later resumes here.
+
+### 7. After the merge
+
+If the merge failed due to a conflict with `develop` — stop and ask the user (this is a product fork).
+
+Sync `develop` locally:
+
+```bash
+git checkout <DEV_BRANCH>
+git pull --ff-only origin <DEV_BRANCH>
 ```
 
 Do **not** delete the local feature branch automatically — leave it to the user.
@@ -347,13 +499,7 @@ Do **not** delete the local feature branch automatically — leave it to the use
 To prevent that, after merging this feature into `develop`, also append a `Closes #$ARGUMENTS` line to the open `develop → main` release PR (if one already exists):
 
 ```
-mcp__github__list_pull_requests(
-  owner=<OWNER>,
-  repo=<REPO>,
-  base=main,
-  head=<OWNER>:develop,
-  state=open
-)
+mcp__github__list_pull_requests(owner=<OWNER>, repo=<REPO>, base=main, head=<OWNER>:develop, state=open)
 ```
 
 - **Zero open release PRs** → skip silently. There is no release PR yet — the next one created must include `Closes` markers itself (see `Release PR conventions` below).
@@ -370,6 +516,8 @@ This step is best-effort: a failure must not block the report in step 8.
 ### 8. Auto-report
 
 Immediately after merge, execute the `/issue-flow:report $ARGUMENTS` steps without pauses and without preview-confirm: gather facts from git/tests, map to issue AC, publish **one** comment via `mcp__github__add_issue_comment`. Details in the `/issue-flow:report` command.
+
+This is also the step a **resumed** run lands on when the PR merged while the session was away.
 
 ### 8.5. Verify the merge reached the running app (config-gated)
 
@@ -408,12 +556,16 @@ Return to the user in one message:
 - the deploy verdict from step 8.5 (one line: live on `DEV_BRANCH`, or the deploy issue to look at) — omit this line if `DEPLOY_VERIFY` is `none`;
 - briefly (1–2 lines): what is closed, what remains (if anything — that is follow-up, not the current task).
 
+If the run instead ended at step 6a's hand-off (PR armed for auto-merge, CI still pending), the wrap-up is that one status line plus the note that re-running the command finishes the report — nothing else.
+
 ## Forbidden
 
 - Never `git push --force` to `develop`/`main`.
 - Never `--no-verify`, `--no-gpg-sign`, or pre-commit bypass without explicit user request.
 - Never `base=main` for feature/bugfix branches.
-- Never merge a PR before green CI — even if everything is green locally.
-- Never merge a PR while `/security-review` (step 5.6) has an unresolved finding — escalate to the user and stop.
+- Never merge a PR before green CI — including via `--auto` on a branch with no required status checks (see the warning in step 6a).
+- Never merge a PR, or arm auto-merge, while the security review (step 5.6) has an unresolved finding — escalate to the user and stop.
+- Never let the step-3.6 deny-list be relaxed by `-bypass`.
+- Never pass the implementer's reasoning to the test judge — it must judge from the issue and the diffs alone.
 - Do not create files in `.claude/plans/`, `notes/` (for an active task), or `*-plan.md` at the repo root.
-- Do not use `gh` CLI for PR/issue operations — only `mcp__github__*`.
+- Do not use `gh` CLI for PR/issue operations — only `mcp__github__*`. The scoped exceptions are the project-board mutation (step 1.5), the code-review skill's own PR comment (step 5.5), and arming auto-merge (step 6a).

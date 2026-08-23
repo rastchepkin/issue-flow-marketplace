@@ -33,6 +33,16 @@
 ## CI
 - CI_CHECK_NAME: CI          <!-- the PR check name work-on-issue / push-to-prod wait on before merge -->
 
+## Merge
+<!-- AUTO_MERGE: true hands the merge to GitHub (`gh pr merge --auto`), so the flow no longer needs
+     the agent alive while CI runs — the session can die or go dormant and the PR still lands.
+     ⚠ Set it to true ONLY after BOTH of these are configured on GitHub:
+        1. Settings → General → Pull Requests → "Allow auto-merge" is ON;
+        2. DEV_BRANCH (and PROD_BRANCH, for push-to-prod) have REQUIRED STATUS CHECKS in branch
+           protection, including CI_CHECK_NAME.
+     Without (2), `--auto` merges IMMEDIATELY and the CI gate is silently bypassed. -->
+- AUTO_MERGE: false
+
 ## Project board (optional — used by /issue-flow:work-on-issue step 1.5 to move the card to "In Progress")
 <!-- These mirror the GitHub repo variables that .github/workflows/project-status.yml reads
      (PROJECT_ID, STATUS_FIELD_ID) plus the "In Progress" option id. Discover them with the
@@ -43,9 +53,31 @@
 - STATUS_FIELD_ID:           <!-- e.g. PVTSSF_... ; same value as the STATUS_FIELD_ID repo variable -->
 - OPTION_IN_PROGRESS:        <!-- single-select option id of the "In Progress" column -->
 
+## Backlog
+<!-- Label meaning "needed, but not now". /plan-issue applies it (flag -backlog, or the КОГДА answer
+     in its sign-off; it is the default under -auto); /work-on-issue removes it at step 1.5 when the
+     issue is taken into work. Filter a board view on `-label:<BACKLOG_LABEL>` to see just the active
+     queue. Leave blank to disable backlog marking entirely. -->
+- BACKLOG_LABEL: status:backlog
+
+## Test-change judge (/issue-flow:work-on-issue step 3.6)
+<!-- Editing or deleting an EXISTING test can silently remove coverage. With TEST_JUDGE: on, an
+     isolated read-only sub-agent judges each change against the issue's AC, the test diff and the
+     source diff, and returns low/medium/high; `low` is auto-accepted and recorded, medium/high stops
+     and asks. Set it to `off` to always require a human (equivalent to running with -ask). -->
+- TEST_JUDGE: on
+- TEST_JUDGE_MODEL: opus     <!-- the judge replaces a human gate — do not cheap out here -->
+- TEST_PROTECTED_PATHS:      <!-- space-separated globs that ALWAYS escalate, judge or not, and that
+                                  -bypass cannot relax. e.g. **/test_auth*.py **/test_permissions*.py
+                                  **/test_billing*.py **/migrations/**. Blank = only the built-in
+                                  deny-list rules (deleted test file, new skip/xfail, tests outside
+                                  the modules the issue touches). -->
+
 ## Reviews (set each to `none` to skip that step)
+<!-- Both run as isolated sub-agents, dispatched in parallel, each returning only its reconciled
+     findings — the raw review output never reaches the main flow's context. -->
 - CODE_REVIEW_SKILL: code-review:code-review   <!-- or `none` → reviewer does a plain self-review of the diff -->
-- SECURITY_REVIEW: /security-review            <!-- or `none` -->
+- SECURITY_REVIEW: /security-review            <!-- or `none`; a finding here is a hard stop before merge -->
 
 ## Deploy verification (set DEPLOY_VERIFY to `none` unless there is a deploy to poll)
 - DEPLOY_VERIFY: none                  <!-- e.g. `dokploy` -->

@@ -20,6 +20,8 @@ If `.claude/flow.config.md` is missing, stop and ask the user to create it from 
 
 This command is typically invoked automatically from `/issue-flow:work-on-issue` right after PR merge, so it runs **autonomously** — no preview, no confirmation prompt.
 
+It is also the tail of a **resumed** run: when a session ends while CI is still pending and GitHub's auto-merge lands the PR unattended, the next `/issue-flow:work-on-issue <N>` detects "merged, no report" and lands here. So do not assume the merge just happened in this session — read the facts from git and GitHub, never from memory of the run.
+
 ## Steps
 
 ### 1. Gather facts from git
@@ -79,7 +81,9 @@ Structure (English, 5 sections):
 - `uv run ruff check .`: ✅
 - `uv run mypy --strict src`: ✅
 - AC coverage: <which AC are closed, which explicitly remain>
-- Existing-test changes: <"none" OR list — `path/to/test_file.py::test_name` — deleted/rewritten/skipped, reason: <…>. Confirmed by user in `/work-on-issue` step 3.6.>
+- Existing-test changes: <"none" OR list — `path/to/test_file.py::test_name` — deleted/rewritten/skipped. Judge: low|medium|high (<ac_fit>, <coverage>, <blast_radius>). Accepted: automatically / confirmed by user / `-bypass` / deny-list override. Reason: <…>>
+
+  This line is the durable record of the step-3.6 gate. Auto-accepted changes are exactly the ones no human looked at, so they must be **more** visible here, not less — read them off the PR body's "Test changes" section, which `/work-on-issue` step 5 fills in.
 
 ## Remaining
 <either "nothing, AC fully closed", or an explicit list of what is not done and why — e.g., split off into follow-up issue #M>

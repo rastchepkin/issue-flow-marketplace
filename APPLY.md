@@ -34,6 +34,9 @@ These become `.claude/flow.config.md`. Ask them together, with best-guess defaul
 | `E2E_PATH` | where e2e tests live, or `none` | detect a `tests/e2e/`-like dir |
 | `CI_CHECK_NAME` | the PR check the flow waits on before merge | the check name in the repo's CI workflow (often `CI`) |
 | `CODE_REVIEW_SKILL` / `SECURITY_REVIEW` | review steps in work-on-issue, or `none` | `code-review:code-review` / `/security-review` if those skills exist, else `none` |
+| `AUTO_MERGE` | hand the merge to GitHub so the flow survives a dead session | **`false`** until Phase 6.5 is done; then `true` |
+| `TEST_PROTECTED_PATHS` | test globs that always need a human, judge or not | ask: auth / permissions / billing / migrations tests, if any |
+| `BACKLOG_LABEL` | label marking "needed, but not now" | `status:backlog` |
 | `DEPLOY_VERIFY` | whether to poll a deploy after merge | default **`none`** unless the user has a deploy to verify |
 | `USER_LANGUAGE` | language of the commands' user-facing chat | ask; default English |
 
@@ -89,11 +92,15 @@ Copy from `templates/` into the repo (merge where a file exists):
 
 ## Phase 6 — GitHub-side wiring (needs `gh` + admin on the repo)
 
-1. **Issue labels** (the templates apply `type:feature` / `type:bug`):
+1. **Issue labels** (the templates apply `type:feature` / `type:bug`; the other two are used by the flow itself):
    ```bash
-   gh label create "type:feature" --color 1d76db --force
-   gh label create "type:bug"     --color d73a4a --force
+   gh label create "type:feature"  --color 1d76db --force
+   gh label create "type:bug"      --color d73a4a --force
+   gh label create "status:backlog" --color ededed --force      --description "Needed, but not scheduled yet"
+   gh label create "needs-decision" --color fbca04 --force      --description "Parked by /batch-work — waiting on a human decision"
    ```
+   `status:backlog` is applied by `/plan-issue` and removed by `/work-on-issue` step 1.5;
+   `needs-decision` is applied by `/batch-work` when it parks a PR instead of stalling the batch.
 2. **PAT for the GitHub MCP server** — token with issue/PR/contents read-write (classic: `repo` +
    `read:org`; or fine-grained scoped to this repo). Put it in the env var referenced in `.mcp.json`.
    Verify the MCP server connects before relying on it.
@@ -121,12 +128,44 @@ Copy from `templates/` into the repo (merge where a file exists):
    (Use `organization(login:...)` instead of `user(...)` for an org project. Board columns should
    include `Develop` and `Production` to match the option lookups.)
 
+   **Separating the active queue from the backlog** is done with the `status:backlog` label, not an
+   extra column: on the board's Todo view add the filter `-label:status:backlog`, so parked work stays
+   on the board but out of the active queue. (A fifth column would also have to fight GitHub's built-in
+   "Item added to project → Todo" workflow, which the label approach sidesteps entirely.)
+
    To also have `/issue-flow:work-on-issue` flip the card to **In Progress** the moment work starts
    (step 1.5, before branch/PR), fill the `## Project board` block in `.claude/flow.config.md` with
    `PROJECT_ID` / `STATUS_FIELD_ID` (the same values as the repo variables above) and
    `OPTION_IN_PROGRESS` (the "In Progress" option id from the same `fields(...)` query). This move is
    driven locally by the command (so the board needs an "In Progress" column), is best-effort, and
    self-skips if any of the three keys is blank — it does not touch the on-merge automation.
+
+## Phase 6.5 — Auto-merge (needed for `AUTO_MERGE: true`)
+
+Without this, the flow can only merge while the agent is alive — so a cloud/web session that goes
+dormant during the CI wait leaves the PR hanging until someone pokes it. With it, GitHub performs the
+merge itself when the required checks pass.
+
+Two settings, and **both are mandatory**:
+
+1. **Allow auto-merge** — repo Settings → General → Pull Requests → check *Allow auto-merge*
+   (`gh api -X PATCH repos/<OWNER>/<REPO> -F allow_auto_merge=true`).
+2. **Required status checks on `DEV_BRANCH`** (and on `PROD_BRANCH` if you use `/push-to-prod`),
+   listing `CI_CHECK_NAME` — via Settings → Branches → branch protection rule, or a ruleset.
+
+> ⚠ **Step 2 is the safety property, not a nicety.** `gh pr merge --auto` defers the merge *only*
+> because a required check is pending. On a branch with **no** required checks, the same command
+> merges **immediately** — so enabling `AUTO_MERGE: true` without step 2 does not speed the flow up,
+> it removes the CI gate. The commands detect this after the fact (they read the PR right after arming
+> and warn if it merged while CI was still pending), but detection is not prevention: verify it here.
+
+Check what is currently required:
+
+```bash
+gh api repos/<OWNER>/<REPO>/branches/<DEV_BRANCH>/protection/required_status_checks --jq '.contexts'
+```
+
+An empty list or a 404 means step 2 is not done — leave `AUTO_MERGE: false` in flow.config until it is.
 
 ## Phase 7 — Deploy verification (only if `DEPLOY_VERIFY` ≠ `none`)
 
@@ -150,6 +189,12 @@ flow.config to point it at this project's critical modules, or leave the tools `
    reads flow.config, branches from `DEV_BRANCH`, opens a PR with `Closes #N`, waits for the CI check,
    and `/issue-flow:report` posts one comment. Fix any mismatch surfaced here in flow.config (not in
    the command files — those are shared).
+5. If `AUTO_MERGE: true`: during that dry-run, confirm the PR was **armed** (GitHub shows
+   "auto-merge enabled") and did **not** merge while CI was still pending. An immediate merge means
+   Phase 6.5 step 2 is missing — set `AUTO_MERGE: false` and fix branch protection first.
+6. Resumability check: interrupt the dry-run while CI is pending, then re-run
+   `/issue-flow:work-on-issue <N>`. It must pick up where it left off (report only, if the PR merged
+   meanwhile) rather than creating a second branch or PR.
 
 ---
 
@@ -167,5 +212,7 @@ flow.config to point it at this project's critical modules, or leave the tools `
 - **Issue = source of truth.** No local plan files. Plan lives in the issue body; result in the `/report` comment.
 - **`Closes #N` in the PR body** is mandatory — it's what `project-status.yml` keys on and what push-to-prod aggregates.
 - **Branch from `DEV_BRANCH`, PR into `DEV_BRANCH`, release `DEV_BRANCH → PROD_BRANCH`** as a **merge commit** (never squash the release).
-- **Autonomous by default**; stop only at real forks (ambiguous AC, merge conflict, unfixable red CI, security finding, existing-test edits). Flags tune this: `/work-on-issue -bypass-low|-bypass` relax the existing-test gate, `/batch-work -no-merge` runs an unattended night batch that opens PRs without merging, and `/plan-issue` (without `-auto`) instead runs a product review (UX + plan/AC sign-off) before creating the issue.
+- **Autonomous by default**; stop only at real forks (ambiguous AC, merge conflict, unfixable red CI, security finding, a risky existing-test edit). Flags tune this: `/work-on-issue -ask` restores a human gate on every existing-test edit and `-bypass` removes it (except the deny-list, which `-bypass` never relaxes); `/batch-work -no-merge` runs an unattended night batch that opens PRs without merging, `-chain`/`-independent` override its dependence inference; `/plan-issue` without `-auto` runs a product review (UX + plan/AC sign-off) before creating the issue, and `-backlog` files it as `status:backlog` instead of the active queue.
+- **Existing tests are gated, not frozen.** Editing or deleting one runs a deny-list (deleted file, new skip/xfail, tests outside the issue's modules, `TEST_PROTECTED_PATHS`) and then an isolated judge sub-agent that scores it against the issue's AC, the test diff, and the source diff. `low` is auto-accepted and recorded in the PR body and the `/report` comment; `medium`/`high` reaches a human.
+- **Resumable, and the merge is GitHub's job.** Every command detects existing branch/PR/report state and re-enters where it left off, and with `AUTO_MERGE: true` the PR merges itself on green CI — so a session that dies or goes dormant during the wait costs one re-invocation, not a restart.
 - **English for all agent-read artifacts**; user-facing chat in `USER_LANGUAGE`.

@@ -13,6 +13,7 @@ This command ships in the shared `issue-flow` plugin, so its body is stack-agnos
 
 - branch names → `DEV_BRANCH` / `PROD_BRANCH` (the literals `develop` / `main` in this file are placeholders)
 - CI check to wait on → `CI_CHECK_NAME`
+- merge strategy → `AUTO_MERGE` (step 4)
 - deploy verification → run step 5.5 only if `DEPLOY_VERIFY` is not `none`, dispatching `DEPLOY_VERIFY_SKILL`
 - user-facing chat language → `USER_LANGUAGE`
 
@@ -123,7 +124,27 @@ Closes #B
 
 One `Closes #N` per line — `.github/workflows/project-status.yml`'s regex matches per line, and a table or bullet list is fine for human readers but does not move project cards on its own. Save the PR number as `<PR>`.
 
-### 4. Wait for green CI
+### 4. Green CI
+
+**This command is resumable.** Re-running it after a session dies is safe: step 3 finds the existing release PR instead of creating a second one, and a PR that merged while you were away is detected here (`state=closed`, `merged=true`) — in that case skip to step 5's local sync and carry on to steps 5.5–7. Never open a second release PR.
+
+#### 4a. `AUTO_MERGE: true` — hand the merge to GitHub
+
+Arm auto-merge with the **merge-commit** method and let GitHub do it when the checks pass, so the release does not depend on this session staying alive:
+
+```bash
+gh pr merge <PR> --auto --merge
+```
+
+`--merge`, never `--squash` — see step 5 for why. The same precondition as in `/work-on-issue` step 6a applies: `--auto` only defers if `PROD_BRANCH` has **required status checks** in branch protection; with none, GitHub merges immediately and the CI gate is not real. Read the PR once right after arming: if it is already merged while `CI_CHECK_NAME` is still pending, say so plainly to the user and continue.
+
+Then poll `get_status` inline at ~30–45 second intervals for **at most ~10 minutes**:
+
+- **Merged in the window** → step 5's post-merge sync.
+- **Still pending** → end the turn cleanly: the release PR is armed and will merge itself on green. Tell the user that re-running `/issue-flow:push-to-prod` afterwards finishes the wrap-up (step 6–7).
+- **A check failed** → auto-merge stays armed but will not fire. Stop. Release-PR fixes go through a normal feature PR into `develop` (then re-run `/push-to-prod`). Do not push directly to `develop` from this skill.
+
+#### 4b. `AUTO_MERGE: false` — poll, then merge in step 5
 
 Poll at ~30–45 second intervals (no faster):
 
@@ -141,6 +162,8 @@ mcp__github__pull_request_read(
 - **Stuck > 15 minutes in pending/queued** → notify the user.
 
 ### 5. Merge as a merge-commit
+
+Skip the merge call itself if step 4a already got the PR merged — go straight to the local sync below.
 
 ```
 mcp__github__merge_pull_request(
@@ -211,7 +234,8 @@ Return to the user in one message:
 
 ## Forbidden
 
-- Never `merge_method=squash` for release PRs.
+- Never `merge_method=squash` for release PRs — and never `gh pr merge --auto --squash` either; the release path is always a merge commit.
+- Never open a second release PR when one is already open — reuse it (step 3) so a resumed run cannot fork the release.
 - Never `git push --force` to `main` or `develop`.
 - Never `--no-verify` or pre-commit bypass without an explicit user request.
 - Never push fixes for failing release-PR CI directly to `develop` from this skill — route them through a normal feature PR into `develop`.

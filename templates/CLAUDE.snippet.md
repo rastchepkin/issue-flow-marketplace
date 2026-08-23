@@ -22,6 +22,34 @@ truth. The flow is provided by the `issue-flow` plugin; project-specific values 
 Creating local plan files (`.claude/plans/*`, `notes/*` for active tasks, any `*-plan.md` at the repo
 root) is **forbidden**. The plan lives in the issue.
 
+`/issue-flow:batch-work <N1,N2,…>` runs step 2 over several issues, one at a time, each in its own
+sub-agent. An issue that needs a human decision is **parked** (branch pushed, PR open, labelled
+`needs-decision`) and the batch continues — unless a later issue in the list depends on it, in which
+case it escalates instead.
+
+### Existing tests are gated
+
+Adding tests is free. **Editing or deleting an existing test** goes through the step-3.6 gate: a
+deny-list (deleted test file, a new `skip`/`xfail` on a green test, tests outside the modules the
+issue touches, anything under `TEST_PROTECTED_PATHS`) always reaches a human, and everything else is
+scored by an isolated judge sub-agent against the issue's AC, the test diff, and the source diff.
+`low` is auto-accepted; `medium`/`high` stops and asks. Either way the change is recorded in the PR
+body's "Test changes" section and in the `/report` comment — nothing lands unrecorded.
+
+### The flow is resumable
+
+Sessions die, and cloud/web sessions go dormant during a CI wait. Every command detects existing
+branch / PR / report state and re-enters where it left off, so recovering is just re-running the same
+command — never a restart, and never a second branch or PR. With `AUTO_MERGE: true` the PR is armed
+with GitHub's auto-merge and lands on green CI without an agent alive; a resumed
+`/issue-flow:work-on-issue <N>` then only publishes the report.
+
+### Backlog
+
+An issue that is needed but not scheduled carries the `status:backlog` label (`BACKLOG_LABEL`).
+`/issue-flow:plan-issue` applies it; `/issue-flow:work-on-issue` removes it the moment work starts.
+The board's active-queue view filters on `-label:status:backlog`.
+
 ## Project config
 
 Branch names, the green-before-PR gate commands, the e2e path, the CI check name, the review steps,
@@ -48,7 +76,9 @@ runs in `<USER_LANGUAGE>` (also set as `USER_LANGUAGE` in `.claude/flow.config.m
 
 - For all issue/PR operations use `mcp__github__*` (see `.mcp.json`). Do not use `gh` for issue/PR ops —
   MCP returns structured responses and one source of truth.
-- `gh` is allowed for what MCP doesn't cover (local auth, repo variables/secrets setup).
+- `gh` is allowed for what MCP doesn't cover (local auth, repo variables/secrets setup) plus three
+  scoped exceptions the commands document inline: the project-board GraphQL mutation, the code-review
+  skill's own PR comment, and arming auto-merge (`gh pr merge --auto`, which MCP cannot do).
 
 ## Infrastructure we rely on
 

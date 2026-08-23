@@ -26,8 +26,12 @@ is never touched by updates, so there are no conflicts.
 
 ```
 discussion ──/issue-flow:plan-issue──▶ GitHub Issue ──/issue-flow:work-on-issue N──▶ branch → TDD → PR (Closes #N)
+                    │                   (-backlog ⇒                           │
+             /issue-flow:ux-explore       status:backlog)          test-change judge (sub-agent)
+             for UI-shaped work                                    code + security review (2 sub-agents, parallel)
                                                                               │
                                                                   green CI → merge to DEV_BRANCH
+                                                                  (GitHub's auto-merge, no agent needed)
                                                                               │
                                                           /issue-flow:report (auto) ──▶ one issue comment
                                                                               │
@@ -37,6 +41,16 @@ discussion ──/issue-flow:plan-issue──▶ GitHub Issue ──/issue-flow:
                                                                               │
                                                   merge-commit → project card moves to "Production"
 ```
+
+Three properties hold the flow together:
+
+- **The issue is the contract.** Everything — the plan, the AC, the test-change verdicts, the final
+  report — lives on the issue and its PR, never in a local plan file.
+- **Every command is resumable.** `/work-on-issue N` inspects branch, PR, and report state and
+  re-enters at the right step, so a dead or dormant session costs one re-invocation, not a restart.
+- **Nothing waits on a human that does not have to.** Low-risk test edits are judged by a sub-agent
+  instead of a prompt; the merge is handed to GitHub's auto-merge; and in `/batch-work`, an issue that
+  does need a decision is parked as an open PR while the batch moves on.
 
 ## What's in the box
 
@@ -93,10 +107,19 @@ session model — the strong (expensive) model is reserved for the work that act
 | **sonnet** | `plan-issue`, `ux-explore`, `push-to-prod`, `report`, `mutation-test` | structured writing, UX reasoning, procedural orchestration with guardrails |
 | **haiku** | `batch-work`, `verify-deploy` | thin orchestrator / mechanical poll-and-compare — the heavy lifting lives in the sub-agents they spawn |
 
-Sub-agents get their model from the spawn, not the command frontmatter, so those are set explicitly too:
-`batch-work`'s work sub-agents run on **opus** (they execute the full `/work-on-issue` flow) while its
-read-only preflight runs on **haiku**; the `verify-deploy` sub-agents dispatched by `work-on-issue` and
-`push-to-prod` run on **haiku**.
+Sub-agents get their model from the spawn, not the command frontmatter, so those are set explicitly:
+
+| Sub-agent | Spawned by | Model | Why |
+|---|---|---|---|
+| test-change judge | `work-on-issue` 3.6 | opus (`TEST_JUDGE_MODEL`) | it replaces a human approval gate — the one place not to cheap out |
+| security review | `work-on-issue` 5.6 | opus | hard gate before merge; a miss ships a vulnerability |
+| code review | `work-on-issue` 5.5 | sonnet | the review skill is itself multi-agent and does the heavy lifting internally |
+| work driver | `batch-work` Step B | opus | runs the full `/work-on-issue` coding flow |
+| preflight | `batch-work` Step A | haiku | read-only skim: plan + `touches`/`refs` for the dependence graph |
+| deploy verify | `work-on-issue` 8.5, `push-to-prod` 5.5 | haiku | mechanical poll-and-compare |
+
+The two reviews are dispatched **in one message** so they run concurrently, and each returns only its
+findings already reconciled against the issue — the raw review output never enters the flow's context.
 
 To change a command's tier, edit its `model:` line (`opus` / `sonnet` / `haiku`), push, and
 `/plugin marketplace update` in each project. To let a command follow your session model instead, delete
