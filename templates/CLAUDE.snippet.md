@@ -44,11 +44,24 @@ command — never a restart, and never a second branch or PR. With `AUTO_MERGE: 
 with GitHub's auto-merge and lands on green CI without an agent alive; a resumed
 `/issue-flow:work-on-issue <N>` then only publishes the report.
 
-### Backlog
+### Board states
 
-An issue that is needed but not scheduled carries the `status:backlog` label (`BACKLOG_LABEL`).
-`/issue-flow:plan-issue` applies it; `/issue-flow:work-on-issue` removes it the moment work starts.
-The board's active-queue view filters on `-label:status:backlog`.
+The project board uses GitHub's default three columns and no custom automation:
+
+| State | How it is represented | Who sets it |
+|---|---|---|
+| not scheduled | `status:backlog` label; the Todo view filters `-label:status:backlog` | `/plan-issue` sets it, `/work-on-issue` clears it |
+| Todo | on the board, no backlog label | built-in *Item added to project* |
+| In Progress | Status field | `/work-on-issue` step 1.5 |
+| Done | Status field | built-in *Item closed* (via the PR's `Closes #N`) |
+| cancelled | issue closed as **not planned** (`state_reason`) | a human: `gh issue close N --reason "not planned"` |
+
+Cancelled issues are **never deleted** — closing as *not planned* keeps them searchable
+(`is:closed reason:"not planned"`) while the built-in Auto-archive workflow takes the card off the
+board. Cancelling work that is already in flight also means closing its open PR.
+
+There is no Develop or Production column. *Merged but not yet live* is the open `DEV_BRANCH →
+PROD_BRANCH` release PR; *shipped* is git history and GitHub Releases.
 
 ## Project config
 
@@ -66,10 +79,12 @@ runs in `<USER_LANGUAGE>` (also set as `USER_LANGUAGE` in `.claude/flow.config.m
 
 - Task branches are created **from `DEV_BRANCH`**, not `PROD_BRANCH`.
 - Branch name: `feat/<N>-<kebab-summary>` (feature) or `fix/<N>-<kebab-summary>` (bug), `<N>` = issue number.
-- PR opened **against `DEV_BRANCH`**; body must contain `Closes #<N>` (triggers `project-status.yml`).
+- PR opened **against `DEV_BRANCH`**; body must contain `Closes #<N>` — it closes the issue on merge, which is what moves the board card to **Done**.
 - Release to `PROD_BRANCH` via a separate `DEV_BRANCH → PROD_BRANCH` PR (`/issue-flow:push-to-prod`),
   merged as a **merge commit**, not squash — keeps `DEV_BRANCH` history reachable so the next release
   doesn't hit add/add conflicts.
+- `Closes #<N>` in a **feature** PR is mandatory: it closes the issue on merge, which is what moves the
+  board card to **Done**. A **release** PR lists its issues plainly instead — they are already closed.
 - **Never** `git push --force` to `PROD_BRANCH`/`DEV_BRANCH`. **Never** `--no-verify` without explicit request.
 
 ## MCP and GitHub operations
@@ -84,8 +99,8 @@ runs in `<USER_LANGUAGE>` (also set as `USER_LANGUAGE` in `.claude/flow.config.m
 
 - `.github/ISSUE_TEMPLATE/feature_request.yml` / `bug_report.yml` — issue body structure.
 - `.github/pull_request_template.md` — PR body structure (`Closes #`, gate checklist).
-- `.github/workflows/project-status.yml` — auto-moves project cards by `Closes #N`. No-op until the
-  `PROJECT_ID` / `STATUS_FIELD_ID` / `OPTION_*` repo variables and `PROJECTS_TOKEN` secret are set.
+- `.github/workflows/ci.yml` — the PR check the flow gates on. Its **job name** is what
+  `CI_CHECK_NAME` refers to and what branch protection requires.
 - `.mcp.json` — GitHub MCP wired.
 - `.claude/flow.config.md` — per-project values for the issue-flow commands.
 - `.claude/settings.json` — pre-approves the read/git/GitHub-MCP calls the commands make.

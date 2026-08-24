@@ -80,7 +80,8 @@ Copy from `templates/` into the repo (merge where a file exists):
 1. **GitHub** → `.github/`
    - `github/ISSUE_TEMPLATE/{feature_request,bug_report,config}.yml`
    - `github/pull_request_template.md` — adjust the checklist gate names to this repo's commands
-   - `github/workflows/project-status.yml`
+   - `github/workflows/ci.example.yml` → `.github/workflows/ci.yml` **only if the repo has no CI yet**;
+     strip it to this project's stack and Phase-2 commands (see Phase 6.3)
    - In `bug_report.yml`, change the **Environment** description (`Python, Django, Node, OS`) to this
      project's real runtime.
 2. **MCP** → merge `github.mcp.json`'s `github` server into the repo's `.mcp.json` (create if absent).
@@ -96,49 +97,67 @@ Copy from `templates/` into the repo (merge where a file exists):
    ```bash
    gh label create "type:feature"  --color 1d76db --force
    gh label create "type:bug"      --color d73a4a --force
-   gh label create "status:backlog" --color ededed --force      --description "Needed, but not scheduled yet"
-   gh label create "needs-decision" --color fbca04 --force      --description "Parked by /batch-work — waiting on a human decision"
+   gh label create "status:backlog" --color ededed --force --description "Needed, but not scheduled yet"
+   gh label create "needs-decision" --color fbca04 --force --description "Parked by /batch-work - waiting on a human decision"
    ```
    `status:backlog` is applied by `/plan-issue` and removed by `/work-on-issue` step 1.5;
    `needs-decision` is applied by `/batch-work` when it parks a PR instead of stalling the batch.
 2. **PAT for the GitHub MCP server** — token with issue/PR/contents read-write (classic: `repo` +
    `read:org`; or fine-grained scoped to this repo). Put it in the env var referenced in `.mcp.json`.
    Verify the MCP server connects before relying on it.
-3. **CI named `CI_CHECK_NAME`.** The flow waits on a PR check by that name (set in flow.config). The
-   repo must have a CI workflow running on `pull_request` for `DEV_BRANCH` and `PROD_BRANCH` that runs
-   the Phase-2 gate commands. If none exists, create one (the source repo's `ci.yml` is a Python+Node
-   example to adapt, not copy).
-4. **Project board automation (optional).** `project-status.yml` is a **no-op until configured** —
-   safe to install and ignore. To enable, set the repo variables `PROJECT_ID`, `STATUS_FIELD_ID`,
-   `OPTION_DEVELOP`, `OPTION_PRODUCTION` and the secret `PROJECTS_TOKEN` (classic PAT, scopes `repo` +
-   `project`). Discover the IDs with:
+3. **CI named `CI_CHECK_NAME`.** The flow will not merge without a green check, so this is
+   load-bearing. The repo needs a workflow on `pull_request` for `DEV_BRANCH` and `PROD_BRANCH`
+   running the Phase-2 gate commands. If none exists, adapt
+   `templates/github/workflows/ci.example.yml` (delete the stacks that don't apply).
+
+   Three names must agree, or the flow waits on a check that never reports: the **job name** in the
+   workflow, `CI_CHECK_NAME` in flow.config, and the required check in branch protection (Phase 6.5).
+   A matrix reports as `CI (3.12)`, `CI (20)`, … — then those are the names, not a bare `CI`.
+   Confirm with `gh pr checks <PR>` on a throwaway PR before relying on it.
+4. **Project board (optional).** The flow uses GitHub's **default three columns — Todo / In Progress
+   / Done** — and no custom Action. Two of the three moves are GitHub's own built-in project
+   workflows; only "work has started" has no native trigger, so the command does that one itself.
+
+   Create a Project (board layout), keep the default `Status` field, and enable these built-in
+   workflows under Project → ⋯ → Workflows:
+
+   | Workflow | Configure as | Effect |
+   |---|---|---|
+   | Auto-add to project | filter `is:issue is:open` | new issues appear without manual adds |
+   | Item added to project | Status → **Todo** | they land in Todo |
+   | Item closed | Status → **Done** | the PR's `Closes #N` closes the issue on merge → Done |
+   | Auto-archive items | filter `is:issue is:closed reason:"not-planned"` | cancelled work leaves the board, the issue survives |
+
+   Then, to let `/issue-flow:work-on-issue` flip the card to **In Progress** at step 1.5, fill the
+   `## Project board` block in `.claude/flow.config.md` with three IDs read from the board:
+
    ```bash
+   gh auth refresh -s project    # the read below needs the project scope
    gh api graphql -f query='
      query($login:String!,$number:Int!){
        user(login:$login){ projectV2(number:$number){
          id
          fields(first:20){ nodes{ ... on ProjectV2SingleSelectField{ id name options{ id name } } } }
        } } }' -F login="<gh-login>" -F number=<project-number>
-   gh variable set PROJECT_ID        --body "PVT_..."
-   gh variable set STATUS_FIELD_ID   --body "PVTSSF_..."
-   gh variable set OPTION_DEVELOP    --body "<develop-option-id>"
-   gh variable set OPTION_PRODUCTION --body "<production-option-id>"
-   gh secret set PROJECTS_TOKEN
    ```
-   (Use `organization(login:...)` instead of `user(...)` for an org project. Board columns should
-   include `Develop` and `Production` to match the option lookups.)
 
-   **Separating the active queue from the backlog** is done with the `status:backlog` label, not an
-   extra column: on the board's Todo view add the filter `-label:status:backlog`, so parked work stays
-   on the board but out of the active queue. (A fifth column would also have to fight GitHub's built-in
-   "Item added to project → Todo" workflow, which the label approach sidesteps entirely.)
+   `projectV2.id` → `PROJECT_ID`; the `Status` field's id → `STATUS_FIELD_ID`; its **In Progress**
+   option id → `OPTION_IN_PROGRESS`. (Use `organization(login:...)` for an org project.) The move is
+   best-effort and self-skips if any of the three is blank — no repo variables, no bot token, nothing
+   to install.
 
-   To also have `/issue-flow:work-on-issue` flip the card to **In Progress** the moment work starts
-   (step 1.5, before branch/PR), fill the `## Project board` block in `.claude/flow.config.md` with
-   `PROJECT_ID` / `STATUS_FIELD_ID` (the same values as the repo variables above) and
-   `OPTION_IN_PROGRESS` (the "In Progress" option id from the same `fields(...)` query). This move is
-   driven locally by the command (so the board needs an "In Progress" column), is best-effort, and
-   self-skips if any of the three keys is blank — it does not touch the on-merge automation.
+   **Two states deliberately live outside the board:**
+   - *not scheduled* → the `status:backlog` label, with the Todo view filtered `-label:status:backlog`.
+     A Backlog column would fight the built-in "Item added → Todo" workflow.
+   - *cancelled* → close the issue as **not planned** (`gh issue close <N> --reason "not planned"`).
+     `state_reason` is a native field, so a Cancelled column would just duplicate it — and would
+     accumulate forever. Auto-archive takes the card off the board; the issue is never deleted and
+     stays searchable as `is:closed reason:"not planned"`.
+
+   There is no **Develop** or **Production** column either: *merged but not yet live* is the open
+   `DEV_BRANCH → PROD_BRANCH` release PR (it lists exactly those issues), and *shipped* is git history.
+   That is why this kit no longer ships a `project-status.yml` — the board needs no bespoke automation,
+   no `PROJECTS_TOKEN` secret, and no repo variables.
 
 ## Phase 6.5 — Auto-merge (needed for `AUTO_MERGE: true`)
 
@@ -187,8 +206,9 @@ flow.config to point it at this project's critical modules, or leave the tools `
 3. The GitHub MCP server connects (try a read, e.g. list issues).
 4. Dry-run: `/issue-flow:plan-issue` a tiny change → `/issue-flow:work-on-issue <N>` → confirm it
    reads flow.config, branches from `DEV_BRANCH`, opens a PR with `Closes #N`, waits for the CI check,
-   and `/issue-flow:report` posts one comment. Fix any mismatch surfaced here in flow.config (not in
-   the command files — those are shared).
+   and `/issue-flow:report` posts one comment. On merge the issue must close and its card reach
+   **Done** on its own. Fix any mismatch surfaced here in flow.config (not in the command files —
+   those are shared).
 5. If `AUTO_MERGE: true`: during that dry-run, confirm the PR was **armed** (GitHub shows
    "auto-merge enabled") and did **not** merge while CI was still pending. An immediate merge means
    Phase 6.5 step 2 is missing — set `AUTO_MERGE: false` and fix branch protection first.
@@ -210,7 +230,7 @@ flow.config to point it at this project's critical modules, or leave the tools `
 ### The contract that makes the flow work
 
 - **Issue = source of truth.** No local plan files. Plan lives in the issue body; result in the `/report` comment.
-- **`Closes #N` in the PR body** is mandatory — it's what `project-status.yml` keys on and what push-to-prod aggregates.
+- **`Closes #N` in a feature PR body** is mandatory — it closes the issue on merge, which is what moves the card to **Done**, and it is how push-to-prod knows what a release ships. A *release* PR lists its issues plainly instead; they are already closed.
 - **Branch from `DEV_BRANCH`, PR into `DEV_BRANCH`, release `DEV_BRANCH → PROD_BRANCH`** as a **merge commit** (never squash the release).
 - **Autonomous by default**; stop only at real forks (ambiguous AC, merge conflict, unfixable red CI, security finding, a risky existing-test edit). Flags tune this: `/work-on-issue -ask` restores a human gate on every existing-test edit and `-bypass` removes it (except the deny-list, which `-bypass` never relaxes); `/batch-work -no-merge` runs an unattended night batch that opens PRs without merging, `-chain`/`-independent` override its dependence inference; `/plan-issue` without `-auto` runs a product review (UX + plan/AC sign-off) before creating the issue, and `-backlog` files it as `status:backlog` instead of the active queue.
 - **Existing tests are gated, not frozen.** Editing or deleting one runs a deny-list (deleted file, new skip/xfail, tests outside the issue's modules, `TEST_PROTECTED_PATHS`) and then an isolated judge sub-agent that scores it against the issue's AC, the test diff, and the source diff. `low` is auto-accepted and recorded in the PR body and the `/report` comment; `medium`/`high` reaches a human.

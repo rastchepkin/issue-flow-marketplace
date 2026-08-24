@@ -107,11 +107,15 @@ mcp__github__list_issues(owner=<OWNER>, repo=<REPO>, state=open, perPage=50)
 
 Separate the results by `BACKLOG_LABEL`: issues carrying it are parked ("needed, but not now"), issues without it are the active queue. A near-duplicate sitting in the backlog is not a reason to drop the new task — it may be the moment to promote the old one instead, which is a user decision worth raising in step 3.6.
 
-**3.2. Similar closed issues** — what has already been done on this topic:
+**3.2. Similar closed issues** — what has already been done on this topic, **and what was deliberately dropped**. Closed does not mean done: GitHub records the reason in `state_reason`, and the two mean opposite things here. Run both queries:
 
 ```
-mcp__github__search_issues(query="<keywords> repo:<OWNER>/<REPO> is:closed", perPage=20)
+mcp__github__search_issues(query="<keywords> repo:<OWNER>/<REPO> is:closed reason:completed", perPage=20)
+mcp__github__search_issues(query="<keywords> repo:<OWNER>/<REPO> is:closed reason:\"not planned\"", perPage=20)
 ```
+
+- `reason:completed` → **already built.** Do not duplicate its AC; build on top of it (see step 4).
+- `reason:"not planned"` → **cancelled**: someone looked at this and decided against it. That is the single most valuable signal in the whole dedup pass and the easiest to lose. Read its closing comment for the reason and surface it to the user *before* drafting anything: the same idea coming back may mean circumstances changed (fine — say what changed in "Problem / Why"), or it may mean you are about to re-litigate a settled decision. This is a user decision, not yours.
 
 **3.3. Deep read of top candidates** — for 2–3 most relevant issues (open OR closed) pull full body and all comments:
 
@@ -139,7 +143,8 @@ If needed — `mcp__github__pull_request_read` on the 1–2 most relevant to see
 **3.6. Collision resolution:**
 
 - Exact duplicate of an open issue → show to user, ask: create new, comment on existing, or drop.
-- Closed issue on the same topic → does not block creating a new one, but its result (`/report`) **must** be reflected in step 4.
+- Closed as `completed` on the same topic → does not block creating a new one, but its result (`/report`) **must** be reflected in step 4.
+- Closed as `not planned` on the same topic → stop and show the user the cancelled issue plus its stated reason, and ask: revive that issue (reopen it), create a new one that explains what changed, or drop the topic again. Never create a silent near-duplicate of something that was consciously cancelled.
 - Topic is actively in flight in an open PR → warn the user and ask whether a separate issue is really needed.
 
 ### 4. Draft the body (English)

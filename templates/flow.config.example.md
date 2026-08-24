@@ -44,11 +44,20 @@
 - AUTO_MERGE: false
 
 ## Project board (optional — used by /issue-flow:work-on-issue step 1.5 to move the card to "In Progress")
-<!-- These mirror the GitHub repo variables that .github/workflows/project-status.yml reads
-     (PROJECT_ID, STATUS_FIELD_ID) plus the "In Progress" option id. Discover them with the
-     `gh api graphql` query shown in APPLY.md. Leave any of the three BLANK to disable the
-     early "In Progress" move — work-on-issue then skips step 1.5 with a warning and proceeds.
-     The Done/Production move on merge is handled by project-status.yml and is independent of these. -->
+<!-- The board uses GitHub's DEFAULT three columns: Todo / In Progress / Done. Two of the three
+     moves are GitHub's own built-in project workflows and need nothing here:
+        Todo  ← "Item added to project"
+        Done  ← "Item closed"  (the PR's `Closes #N` closes the issue on merge)
+     "Work has started" has no native trigger, so work-on-issue step 1.5 sets In Progress itself —
+     that is what these three keys are for. Discover them with the `gh api graphql` query in
+     docs/GITHUB-SETUP.md. Leave any of the three BLANK to disable the move; work-on-issue then
+     skips step 1.5 with a warning and proceeds.
+
+     Deliberately absent: a Develop and a Production column. "Merged but not yet live" is the open
+     develop→main release PR, and "shipped" is git history / GitHub Releases — neither needs a column
+     kept in sync by a bespoke workflow. Cancelled work is not a column either: close the issue as
+     "not planned" (`gh issue close N --reason "not planned"`) and let the built-in Auto-archive
+     workflow take the card off the board. The issue itself is never deleted. -->
 - PROJECT_ID:                <!-- e.g. PVT_... ; same value as the PROJECT_ID repo variable -->
 - STATUS_FIELD_ID:           <!-- e.g. PVTSSF_... ; same value as the STATUS_FIELD_ID repo variable -->
 - OPTION_IN_PROGRESS:        <!-- single-select option id of the "In Progress" column -->

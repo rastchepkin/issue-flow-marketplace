@@ -1,9 +1,11 @@
 ---
-description: Cut a release — open develop → main PR, wait for green CI, merge as merge-commit, and let project-status.yml move closed issues to Production
+description: Cut a release — open develop → main PR listing the issues it ships, wait for green CI, merge as a merge-commit
 model: sonnet
 ---
 
-Promote everything currently on `develop` to `main` via a release PR, wait for CI, merge as a **merge commit** (not squash), and rely on `.github/workflows/project-status.yml` to move each linked issue's project card to **Production**.
+Promote everything currently on `develop` to `main` via a release PR, wait for CI, and merge as a **merge commit** (not squash).
+
+The release PR is also the flow's answer to *"what is merged but not yet live?"* — while it is open, its issue list is exactly that set. There is no **Production** board column to keep in sync: issues reach **Done** when they merge into `DEV_BRANCH`, and what has shipped to `PROD_BRANCH` is read from the release PRs and from `git log`.
 
 Before any `mcp__github__*` call, resolve `<OWNER>` and `<REPO>` from `git remote get-url origin` (format `https://github.com/<OWNER>/<REPO>.git`) — this file is template-shaped and must not hardcode a specific repo.
 
@@ -41,43 +43,31 @@ git log --oneline origin/main..origin/develop
 
 If the log is empty — stop. Tell the user `develop is even with main; nothing to release.` and exit.
 
-### 2. Collect `Closes #N` markers from the PRs merged into develop
+### 2. Collect the issues this release ships
 
-A feature PR links its issue with `Closes #N` in the **PR body**, which GitHub turns into a native link. That keyword does **not** reliably reach any commit message on `develop` — a squash merge keeps only the PR title + `(#PR)` in the subject and drops the body's `Closes` line. Scraping commit text alone therefore silently misses those issues and leaves their cards stuck in **Develop** at release time. Derive the set from the **PR bodies**, which is where the link actually lives.
+The release PR body should list every issue going out, so the PR doubles as the release note and as the "merged but not yet live" list while it is open.
 
-First, list the PR numbers merged into develop in this window — both merge-commit (`Merge pull request #N`) and squash (`… (#N)`) subjects carry the number:
+A feature PR links its issue with `Closes #N` in the **PR body**. That keyword does **not** reliably reach any commit message on `develop` — a squash merge keeps only the PR title + `(#PR)` in the subject and drops the body — so derive the set from the PR bodies, not from commit text.
+
+List the PR numbers merged into develop in this window (both merge-commit `Merge pull request #N` and squash `… (#N)` subjects carry the number):
 
 ```bash
-git log origin/main..origin/develop --pretty=format:%s%n%b \
-  | grep -oiE '(merge pull request #[0-9]+|\(#[0-9]+\))' \
-  | grep -oE '[0-9]+' \
-  | sort -un
+git log origin/main..origin/develop --pretty=format:%s%n%b |
+  grep -oiE '(merge pull request #[0-9]+|\(#[0-9]+\))' |
+  grep -oE '[0-9]+' |
+  sort -un
 ```
 
-Save these as `<PRS>`. It is a superset: a subject like `… (#87) (#91)` contributes both the issue `#87` and the PR `#91`. Non-PR numbers are harmless — they are skipped in the next step.
-
-Then, for every number `n` in `<PRS>`, read the PR via MCP and union its closing refs:
+Save these as `<PRS>` — a superset, since a subject like `… (#87) (#91)` contributes both the issue and the PR number. Then read each one and union the issues it closed:
 
 ```
 mcp__github__pull_request_read(method=get, owner=<OWNER>, repo=<REPO>, pullNumber=<n>)
 ```
 
 - If `n` is not a pull request (404 / it is an issue) — skip it.
-- From the returned `body`, extract issue numbers with the **same** regex `.github/workflows/project-status.yml` uses (case-insensitive, word-boundary on `#`): `(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+#[0-9]+`.
-- Union every match across all PR bodies.
+- From the returned `body`, extract issue numbers matching `(close[sd]?|fix(es|ed)?|resolve[sd]?)\s+#[0-9]+`, case-insensitive.
 
-Also union the legacy commit-text scrape as a belt-and-suspenders fallback — it catches a `Closes #N` written directly in a commit message that has no owning PR body:
-
-```bash
-git log origin/main..origin/develop --pretty=format:%B \
-  | grep -oiE '(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]+#[0-9]+' \
-  | grep -oE '#[0-9]+' \
-  | sort -u
-```
-
-The union of the PR-body refs and this fallback is `<CLOSES>`. Do **not** use commit-text alone — that is the bug this step replaces (see #103).
-
-If the set is empty — warn the user that the project-board move will be a no-op and ask whether to proceed anyway. Default: proceed.
+Call the union `<ISSUES>`. This list is **descriptive**: a miss makes the release note less complete, nothing more — it does not strand a project card, because the cards already moved to **Done** when each feature PR merged into `develop`. If the set comes out empty, say so in one line and carry on; do not stop to ask.
 
 ### 3. Find or create the release PR
 
@@ -92,7 +82,7 @@ mcp__github__list_pull_requests(
 ```
 
 - **More than one** → stop and ask.
-- **Exactly one** → reuse as `<PR>`. Read its body. For every `#N` in `<CLOSES>` whose `Closes #N` line is missing from the body, append it under a stable `## Closes` section (insert the section right after `## What & why` if absent) and persist via `mcp__github__update_pull_request(body=...)`. Skip to step 4.
+- **Exactly one** → reuse as `<PR>`. Read its body and add any `#N` from `<ISSUES>` missing from its `## Ships` section (insert the section right after `## What & why` if absent), then persist via `mcp__github__update_pull_request(body=...)`. Skip to step 4.
 - **Zero** → create one:
 
 ```
@@ -110,11 +100,11 @@ PR body:
 
 ```markdown
 ## What & why
-Promote `develop` to `main`. Linked issues are listed under `## Closes`.
+Promote `develop` to `main`.
 
-## Closes
-Closes #A
-Closes #B
+## Ships
+- #A — <issue title>
+- #B — <issue title>
 ...
 
 ## Checklist
@@ -122,7 +112,7 @@ Closes #B
 - [ ] Merge method: **Create a merge commit** (NOT squash) — preserves develop's history so the next release does not hit add/add conflicts
 ```
 
-One `Closes #N` per line — `.github/workflows/project-status.yml`'s regex matches per line, and a table or bullet list is fine for human readers but does not move project cards on its own. Save the PR number as `<PR>`.
+Write the list for humans — these issues are **already closed** (each was closed by its own feature PR merging into `develop`), so do **not** use `Closes #N` here: it would be a no-op that reads as if the release closed them. Save the PR number as `<PR>`.
 
 ### 4. Green CI
 
@@ -212,23 +202,23 @@ Agent(
 
 Surface the returned **verdict** in the step-7 wrap-up. A non-success verdict does not roll back the release (the merge stands); it is operational feedback that the production deploy needs attention. Best-effort: a subagent error must not block step 6.
 
-### 6. Confirm Production status updates
+### 6. The release record
 
-`.github/workflows/project-status.yml` runs on PR-closed (merged) with `base=main` and moves each linked issue's project card to **Production**, extracting numbers from the merged PR body via the same regex used in step 2.
+There is **nothing to reconcile on the project board.** Each issue in `<ISSUES>` reached **Done** when its own feature PR merged into `DEV_BRANCH`; a release does not change an issue's status, it changes where the code runs. The durable record of what shipped is the merged release PR itself — it carries the issue list, the merge commit, and the date.
 
-Verification is best-effort:
+So this step is just a check that the record is readable:
 
-- If the workflow's project-board variables (`PROJECT_ID`, `STATUS_FIELD_ID`, `OPTION_DEVELOP`, `OPTION_PRODUCTION`) are unset, the workflow exits early and the move is silently disabled — there is nothing to verify.
-- Otherwise the move runs in seconds on the merged PR; the run is visible under Actions → "Project status sync".
+- the merged release PR's `## Ships` list is populated (if step 2 came up empty, note that in the wrap-up rather than silently shipping an unlabelled release);
+- `git log --oneline -1 <PROD_BRANCH>` is the merge commit anyone can diff against.
 
-Do not block on this — either it succeeds quickly or the project board is not configured.
+If the user wants a tagged, browsable release on top of that, `gh release create <tag> --generate-notes --target <PROD_BRANCH>` does it — **only when they ask**. Do not tag on your own: version naming is a product decision.
 
 ### 7. Wrap-up
 
 Return to the user in one message:
 
 - URL of the merged release PR;
-- the `<CLOSES>` set as `Moved to Production: #A, #B, …` (or `none` if empty);
+- the `<ISSUES>` set as `Shipped: #A, #B, …` (or `none if the list came up empty` — say so plainly, it means the release note is incomplete);
 - the deploy verdict from step 5.5 (one line: live in production, or the deploy issue to look at) — omit this line if `DEPLOY_VERIFY` is `none`;
 - one-line note that `PROD_BRANCH` and `DEV_BRANCH` are synced locally.
 
@@ -242,3 +232,5 @@ Return to the user in one message:
 - Do not skip waiting for green CI before merge.
 - Do not use `gh` CLI for PR operations — only `mcp__github__*`.
 - Do not create local plan files. The release lives in the PR body.
+- Do not put `Closes #N` in a release PR body — those issues are already closed, and the line would read as if the release closed them.
+- Do not tag or publish a GitHub Release unless the user asks — the version number is theirs to choose.

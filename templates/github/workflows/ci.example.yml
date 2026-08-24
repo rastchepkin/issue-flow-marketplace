@@ -1,0 +1,69 @@
+# Example CI for the issue-flow flow. Copy to `.github/workflows/ci.yml` and keep ONLY the
+# steps that match this project's stack (the commands must be the same ones you put in
+# `.claude/flow.config.md` as TEST_CMD / LINT_CMD / FORMAT_CMD / TYPECHECK_CMD / FE_*).
+#
+# Two things here are load-bearing — do not rename them casually:
+#
+#   1. `name: CI` on the JOB. GitHub reports the check under the job's name, and that is the
+#      string you put in flow.config as CI_CHECK_NAME and add to the branch-protection
+#      "required status checks" list. Change one, change all three.
+#   2. The `pull_request` trigger on both long-lived branches. `/work-on-issue` waits on this
+#      check before merging into DEV_BRANCH, and `/push-to-prod` waits on it for the
+#      DEV_BRANCH → PROD_BRANCH release PR.
+#
+# A matrix turns one check into several named `CI (3.12)`, `CI (20)` etc. — then those are the
+# names to require, not a bare `CI`. Keeping a single job is simpler and is what this example does.
+
+name: CI
+
+on:
+  pull_request:
+    branches: [develop, main] # ← DEV_BRANCH, PROD_BRANCH
+  push:
+    branches: [develop, main] # optional: also validate what actually landed
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  CI:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Python (uv) ────────────────────────────────────────────────────────
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras --dev
+      - name: Lint
+        run: uv run ruff check .
+      - name: Format
+        run: uv run ruff format --check .
+      - name: Typecheck
+        run: uv run mypy
+      - name: Tests
+        run: uv run pytest
+
+      # ── Node / TypeScript (delete if there is no frontend) ─────────────────
+      # - uses: actions/setup-node@v4
+      #   with:
+      #     node-version: '20'
+      #     cache: npm
+      #     cache-dependency-path: frontend/package-lock.json
+      # - run: npm ci
+      #   working-directory: frontend
+      # - run: npm run lint
+      #   working-directory: frontend
+      # - run: npm run typecheck
+      #   working-directory: frontend
+      # - run: npm run test
+      #   working-directory: frontend
+      # - run: npm run build
+      #   working-directory: frontend
+
+      # ── Other stacks, for reference ────────────────────────────────────────
+      # Go:    go vet ./... && go test ./...
+      # Rust:  cargo fmt --check && cargo clippy -- -D warnings && cargo test

@@ -39,8 +39,18 @@ discussion ──/issue-flow:plan-issue──▶ GitHub Issue ──/issue-flow:
                                                                               │
                                           /issue-flow:push-to-prod ──▶ DEV_BRANCH → PROD_BRANCH PR
                                                                               │
-                                                  merge-commit → project card moves to "Production"
+                                                  merge-commit → live in PROD_BRANCH
 ```
+
+**Board states.** The project board stays on GitHub's default three columns and needs no custom
+automation — *Todo* and *Done* are built-in project workflows, and only *In Progress* is set by the
+flow. The two states that are not columns:
+
+| State | How it's represented | Why not a column |
+|---|---|---|
+| not scheduled | `status:backlog` label; the Todo view filters it out | orthogonal to the pipeline, and a column would fight the built-in "Item added → Todo" |
+| cancelled | issue closed as **not planned** (`state_reason`) — never deleted, auto-archived off the board | GitHub already stores it natively; a column would duplicate it and accumulate forever |
+| merged, not yet live | the open `DEV_BRANCH → PROD_BRANCH` release PR — it lists exactly those issues | that list maintains itself; a column needs a bespoke Action to stay in sync |
 
 Three properties hold the flow together:
 
@@ -72,11 +82,12 @@ issue-flow-marketplace/                      ← repo root (the marketplace)
 ├── templates/                               ← copied INTO each target project (NOT part of the plugin)
 │   ├── flow.config.example.md               → becomes the project's .claude/flow.config.md (the only per-project coupling)
 │   ├── CLAUDE.snippet.md                    → merge into the project's CLAUDE.md
-│   ├── github/                              → copy into the project's .github/ (issue templates, PR template, project-status.yml)
+│   ├── github/                              → copy into the project's .github/ (issue + PR templates, ci.example.yml)
 │   ├── github.mcp.json                      → merge the github server into the project's .mcp.json
 │   └── settings.example.json                → merge into the project's .claude/settings.json
+├── docs/GITHUB-SETUP.md                     ← the GitHub side, by hand: branches, labels, CI, auto-merge, board
 ├── README.md                                ← you are here
-└── APPLY.md                                 ← runbook: install the plugin + config into a target repo
+└── APPLY.md                                 ← runbook: the same setup, written for the agent to execute
 ```
 
 ★ core · ○ optional helper
@@ -94,7 +105,9 @@ issue-flow-marketplace/                      ← repo root (the marketplace)
 3. **To change the flow later**: edit a command in the marketplace repo, push, then run
    `/plugin marketplace update issue-flow-marketplace` in each project.
 
-See `APPLY.md` for the exact step-by-step.
+See **[docs/GITHUB-SETUP.md](docs/GITHUB-SETUP.md)** if you want to do the GitHub side by hand
+(branches, labels, CI, branch protection + auto-merge, the board), or `APPLY.md` for the same ground
+written as a runbook the agent executes.
 
 ## Cost: per-command model tiering
 

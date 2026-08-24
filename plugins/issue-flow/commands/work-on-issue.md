@@ -69,13 +69,21 @@ mcp__github__issue_read(method=get_comments, owner=<OWNER>, repo=<REPO>, issue_n
 
 Study **body + all comments** — they may contain scope refinement, AC changes, or intermediate decisions. From labels infer `<type>` for the branch: `feat` (label `type:feature`) or `fix` (label `type:bug`).
 
+**Check the issue is actually open.** GitHub records *why* an issue closed in `state_reason`:
+
+- `state: open` → proceed normally.
+- `state: closed`, `state_reason: not_planned` → the issue was **cancelled**: someone decided it is no longer worth doing. Stop and ask the user whether to reopen it before doing anything else; quote the closing comment if there is one. Never silently work a cancelled issue — that is the one case where the board and the issue agree the work should not happen.
+- `state: closed`, `state_reason: completed` → already done. Say so and stop, unless the user is explicitly asking for follow-up work (then the right move is a new issue, not this one).
+
 While reading the comments, note whether a **`/report` comment already exists** (a comment whose body starts with `## What was done`) — step 2 needs that signal.
 
 Send the user **one short message** (3–6 lines): task, AC, approach, affected files. This is a notification, **not** a confirmation request — go straight to step 1.5. On a **resume** (step 2 finds existing work), replace it with one line saying where you are picking up.
 
 ### 1.5. Move the issue to "In Progress" and clear the backlog label (config-gated, best-effort)
 
-Right away — **before** the branch and PR exist — flip the issue's project card to **In Progress** so the board reflects that work has started. This complements `.github/workflows/project-status.yml`, which only moves cards to **Develop**/**Production** on merge; that on-merge behavior is independent and must stay untouched.
+Right away — **before** the branch and PR exist — flip the issue's project card to **In Progress** so the board reflects that work has started.
+
+This is the **only** board move the flow performs by hand. The other two are GitHub's own built-in project workflows and need no code from us: *Item added to project → Todo*, and *Item closed → Done* (the PR's `Closes #N` closes the issue on merge, which fires it). "Work has started" has no native trigger, which is why this one step exists.
 
 **Clear the backlog label first.** Read `BACKLOG_LABEL` from `.claude/flow.config.md` (default `status:backlog`). That label means "needed, but not now"; taking the issue into work makes it false. Removing it is what keeps a board view filtered on `-label:<BACKLOG_LABEL>` honest:
 
@@ -89,7 +97,7 @@ Then the board move. Read `PROJECT_ID`, `STATUS_FIELD_ID`, and `OPTION_IN_PROGRE
 
 - **Graceful skip:** if any of the three is missing or blank, print one line — `Project board not configured (PROJECT_ID/STATUS_FIELD_ID/OPTION_IN_PROGRESS) — skipping In Progress move.` — and go straight to step 2. **Never** let this block the flow.
 
-Otherwise run the GraphQL via `gh api graphql` (a project-board mutation, not a PR/issue op, so it is outside the "only `mcp__github__*`" rule — a deliberate scoped exception, like the `gh`-based code review in step 5.5). This mirrors `project-status.yml`: resolve the issue node id, ensure the issue is on the board, then set the status field.
+Otherwise run the GraphQL via `gh api graphql` (a project-board mutation, not a PR/issue op, so it is outside the "only `mcp__github__*`" rule — a deliberate scoped exception, like the `gh`-based code review in step 5.5). Resolve the issue node id, ensure the issue is on the board, then set the status field.
 
 ```bash
 set -euo pipefail
@@ -141,6 +149,7 @@ Combine that with the report-comment signal from step 1 and re-enter at the matc
 | PR **open**, code-review comment present | **step 5.6** (the security review always re-runs on resume — it leaves no artifact to detect, and re-running a hard gate is the safe direction) |
 | PR **merged**, no `/report` comment on the issue | **step 8** |
 | PR **merged**, `/report` comment present | nothing to do — tell the user in one line and exit |
+| issue **cancelled** (closed as `not_planned`) but a branch/PR exists | stop and ask. The work was abandoned after it started, so the open PR is now litter: offer to close the PR (leaving the branch — deleting it is the user's call). Do not merge and do not report. |
 
 Detect the code-review comment via `mcp__github__pull_request_read(method=get_comments, …)`. When resuming onto an existing branch, `git checkout <branch> && git pull --ff-only origin <branch>` first, and do **not** re-run steps the table says are already done.
 
@@ -374,7 +383,7 @@ Closes #$ARGUMENTS
 - [ ] docs/README updated if needed
 ```
 
-`Closes #$ARGUMENTS` is **mandatory** in the body — without it `.github/workflows/project-status.yml` will not move the project card.
+`Closes #$ARGUMENTS` is **mandatory** in the body. It is what makes GitHub close the issue when the PR merges, which in turn fires the built-in *Item closed → Done* project workflow. Without it the issue stays open and its card never leaves **In Progress**, and `/issue-flow:push-to-prod` cannot tell which issues a release contains.
 
 Save the PR number (`<PR>`) for the next steps.
 
@@ -492,26 +501,7 @@ git pull --ff-only origin <DEV_BRANCH>
 
 Do **not** delete the local feature branch automatically — leave it to the user.
 
-### 7.5. Forward `Closes #N` to the open release PR (if any)
-
-`.github/workflows/project-status.yml` moves an issue's project card to **Production** only when a PR with `base=main` is merged **and** its body contains a `Closes #N` marker for that issue. Squash-style release PRs that list issues as a table or bullet list (without the `Closes` keyword) are silently ignored — exactly the trap that left a backlog of merged issues stuck in `Develop` until manual cleanup.
-
-To prevent that, after merging this feature into `develop`, also append a `Closes #$ARGUMENTS` line to the open `develop → main` release PR (if one already exists):
-
-```
-mcp__github__list_pull_requests(owner=<OWNER>, repo=<REPO>, base=main, head=<OWNER>:develop, state=open)
-```
-
-- **Zero open release PRs** → skip silently. There is no release PR yet — the next one created must include `Closes` markers itself (see `Release PR conventions` below).
-- **Exactly one** → read its body. If the body already contains `Closes #$ARGUMENTS` (case-insensitive, with a `#` word boundary), skip. Otherwise append `Closes #$ARGUMENTS` on its own line under a stable `## Closes` section (insert the section right after `## What & why` if absent) and persist via `mcp__github__update_pull_request(body=...)`.
-- **More than one** → stop and ask the user (unusual state, likely a stale PR).
-
-This step is best-effort: a failure must not block the report in step 8.
-
-**Release PR conventions (for whoever cuts the release):**
-
-- **Merge method**: `Create a merge commit`, **not** squash. A squash collapses develop's history into a single new SHA on `main`; the next release then sees add/add conflicts on every file touched in the previous release because the original commits are unreachable from `main`.
-- **Body**: every issue being released must appear as `Closes #N` on its own line (a table or bullet list is fine for human readers, but the `Closes` lines are what the workflow regex matches).
+The merge closes the issue via `Closes #N`, and GitHub's built-in *Item closed → Done* workflow moves the card. Nothing to do here. Which issues are in `DEV_BRANCH` but not yet released is answered by the open `develop → main` release PR, not by a board column — `/issue-flow:push-to-prod` builds that list.
 
 ### 8. Auto-report
 
@@ -563,6 +553,8 @@ If the run instead ended at step 6a's hand-off (PR armed for auto-merge, CI stil
 - Never `git push --force` to `develop`/`main`.
 - Never `--no-verify`, `--no-gpg-sign`, or pre-commit bypass without explicit user request.
 - Never `base=main` for feature/bugfix branches.
+- Never open a PR without `Closes #N` in the body — the issue would never close and the card would never reach **Done**.
+- Never work an issue closed as `not_planned` without the user reopening it first.
 - Never merge a PR before green CI — including via `--auto` on a branch with no required status checks (see the warning in step 6a).
 - Never merge a PR, or arm auto-merge, while the security review (step 5.6) has an unresolved finding — escalate to the user and stop.
 - Never let the step-3.6 deny-list be relaxed by `-bypass`.
