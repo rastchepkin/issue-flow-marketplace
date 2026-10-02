@@ -48,13 +48,14 @@ Leave `main` as the repo's default branch.
 
 ## 2. Labels
 
-Four labels, all used by the commands:
+Five labels, all used by the commands:
 
 ```bash
 gh label create "type:feature"   --color 1d76db --force
 gh label create "type:bug"       --color d73a4a --force
 gh label create "status:backlog" --color ededed --force --description "Needed, but not scheduled yet"
 gh label create "needs-decision" --color fbca04 --force --description "Parked - waiting on a human decision"
+gh label create "prod:action-required" --color b60205 --force --description "Needs a manual step in production before/after release"
 ```
 
 | Label | Set by | Cleared by | Means |
@@ -62,6 +63,7 @@ gh label create "needs-decision" --color fbca04 --force --description "Parked - 
 | `type:feature` / `type:bug` | the issue template | — | picks the branch prefix (`feat/` / `fix/`) |
 | `status:backlog` | `/plan-issue` (flag `-backlog`, or the sign-off answer; default under `-auto`) | `/work-on-issue` when work starts | needed, but not now |
 | `needs-decision` | `/batch-work` when it parks a PR | you, when you decide | a PR is open and waiting on a human |
+| `prod:action-required` | `/plan-issue`, `/work-on-issue` step 3.7 (with a `## Prod checklist` in the issue body) | `/push-to-prod` once the checklist is fully ticked | going live needs a manual step — `/push-to-prod` won't deploy until the *Before deploy* items are done |
 
 ## 3. Repo files
 
@@ -215,6 +217,7 @@ The keys that depend on the steps above:
 - CI_CHECK_NAME: CI              ← step 4, must equal the job name
 - AUTO_MERGE: true               ← step 5, ONLY after 5b verifies
 - BACKLOG_LABEL: status:backlog  ← step 2
+- PROD_ACTION_LABEL: prod:action-required  ← step 2
 - PROJECT_ID: PVT_...            ← step 7d
 - STATUS_FIELD_ID: PVTSSF_...    ← step 7d
 - OPTION_IN_PROGRESS: ...        ← step 7d

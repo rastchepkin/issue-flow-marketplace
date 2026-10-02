@@ -32,6 +32,7 @@ This command ships in the shared `issue-flow` plugin, so its body is stack-agnos
 - review steps → `CODE_REVIEW_SKILL` / `SECURITY_REVIEW` (skip a step whose value is `none`)
 - test-change judge → `TEST_JUDGE`, `TEST_JUDGE_MODEL`, `TEST_PROTECTED_PATHS` (step 3.6)
 - backlog label → `BACKLOG_LABEL` (step 1.5)
+- manual prod steps label → `PROD_ACTION_LABEL` (step 3.7; blank disables it)
 - merge strategy → `AUTO_MERGE` (step 6)
 - deploy verification → run step 8.5 only if `DEPLOY_VERIFY` is not `none`, dispatching `DEPLOY_VERIFY_SKILL`
 - user-facing chat language → `USER_LANGUAGE` (any "(currently Russian)" note below is a placeholder)
@@ -335,6 +336,44 @@ On the **waiting** path: after "yes" — commit test changes as a **separate** `
 
 If the user refuses (waiting path only) — reconsider the approach: maybe the new behavior should coexist with the old, or the AC is formulated incorrectly.
 
+### 3.7. Record manual prod steps (config-gated, non-blocking)
+
+**Skip if `PROD_ACTION_LABEL` is blank in `.claude/flow.config.md`.**
+
+Some changes cannot go live by merging code alone: someone has to set an env var, add a secret, change a hosting/infra setting, or run a one-off command. On `DEV_BRANCH` that happens while the work is fresh; by the time `/issue-flow:push-to-prod` ships it, nobody remembers. So record it **now, on the issue** — `push-to-prod` step 2.5 collects these and will not deploy until they are done.
+
+Scan the branch's diff against `DEV_BRANCH` (`git diff origin/<DEV_BRANCH>...HEAD`) for signals. Typical ones (adapt to the stack):
+
+- a **new** env var read — `os.environ[…]`, `os.getenv`, `env(…)`, `process.env.X`, `import.meta.env.X`, a new settings field bound to an env var;
+- a new key in `.env.example` / `.env.sample`, a settings schema, or a `docker-compose*`/`Dockerfile`/deploy manifest;
+- a new secret referenced in `.github/workflows/*` (`secrets.X`, `vars.X`);
+- a new external service, webhook URL, OAuth redirect, cron/scheduled job, bucket or queue the hosting has to know about;
+- a data migration or one-off script that must be run by hand after the deploy;
+- anything the **issue body or comments** already state as a manual step (e.g. `/plan-issue` filled the section in).
+
+Also count anything you yourself asked the user to do outside the code during this run ("set X in the dev environment").
+
+**Do not flag** a variable that already has a safe default and is optional, or one that already existed before this branch.
+
+If you found anything, merge it into the issue body's `## Prod checklist` section (create it at the end of the body if absent), keeping the two buckets:
+
+```markdown
+## Prod checklist
+Before deploy:
+- [ ] Set env `FOO_API_KEY` on the prod app — required by `<module>`, no default
+After deploy:
+- [ ] Run `manage.py backfill_foo` once on prod
+```
+
+- **Before deploy** — the new code breaks or misbehaves without it (most env vars, secrets, infra settings). When unsure, it goes here.
+- **After deploy** — needs the new code to be live first (data backfills, one-off commands, re-registering a webhook to a new endpoint).
+- Name the variable/secret and **where** it is set, never its value.
+- Merge, do not duplicate: an item already present (checked or not) stays as it is. Never rewrite other parts of the issue body.
+
+Then add `PROD_ACTION_LABEL` to the issue (`mcp__github__issue_write(method=update, …)` with the body and `labels=[<current labels> + PROD_ACTION_LABEL]`). If the label does not exist in the repo, create it once via `gh label create <PROD_ACTION_LABEL> --color b60205 --description "Needs a manual step in production before/after release"` and retry (the same scoped label exception `/plan-issue` uses).
+
+This step is **not a stop point** — the work continues. Tell the user in one line what was recorded, and if an item is also needed on the `DEV_BRANCH` environment for this merge to work there, say so explicitly: `Для dev-окружения тоже нужно: <item>.` Nothing found → no message.
+
 ### 4. Commit and push
 
 Conventional-style in English (`feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`). One logically coherent commit per change, not "WIP".
@@ -374,6 +413,12 @@ Closes #$ARGUMENTS
 - Existing tests modified/deleted (gate per step 3.6 — state the judge's verdict and how it was accepted):
   - `path/to/test_file.py::test_name` — deleted / rewritten / skipped. Judge: low|medium|high (<ac_fit>, <coverage>, <blast_radius>). Accepted: automatically / confirmed by user / `-bypass`. Reason: <…>
   - …
+
+## Prod steps
+<only if step 3.7 recorded anything; omit otherwise>
+Manual steps are tracked in the issue's `## Prod checklist`; `/push-to-prod` gates the release on them.
+- Before deploy: <item>
+- After deploy: <item>
 
 ## Checklist
 - [x] TDD: red → green → refactor completed
@@ -544,7 +589,8 @@ Return to the user in one message:
 - URL of the merged PR;
 - URL of the posted report comment;
 - the deploy verdict from step 8.5 (one line: live on `DEV_BRANCH`, or the deploy issue to look at) — omit this line if `DEPLOY_VERIFY` is `none`;
-- briefly (1–2 lines): what is closed, what remains (if anything — that is follow-up, not the current task).
+- briefly (1–2 lines): what is closed, what remains (if anything — that is follow-up, not the current task);
+- if the issue has a `## Prod checklist`: one line — `Ручные шаги для прода записаны в #N — /push-to-prod напомнит.` plus anything still needed on the `DEV_BRANCH` environment.
 
 If the run instead ended at step 6a's hand-off (PR armed for auto-merge, CI still pending), the wrap-up is that one status line plus the note that re-running the command finishes the report — nothing else.
 
@@ -558,6 +604,7 @@ If the run instead ended at step 6a's hand-off (PR armed for auto-merge, CI stil
 - Never merge a PR before green CI — including via `--auto` on a branch with no required status checks (see the warning in step 6a).
 - Never merge a PR, or arm auto-merge, while the security review (step 5.6) has an unresolved finding — escalate to the user and stop.
 - Never let the step-3.6 deny-list be relaxed by `-bypass`.
+- Never write a secret **value** into the issue, the PR, or a commit — the prod checklist names the variable and where to set it, nothing more.
 - Never pass the implementer's reasoning to the test judge — it must judge from the issue and the diffs alone.
 - Do not create files in `.claude/plans/`, `notes/` (for an active task), or `*-plan.md` at the repo root.
-- Do not use `gh` CLI for PR/issue operations — only `mcp__github__*`. The scoped exceptions are the project-board mutation (step 1.5), the code-review skill's own PR comment (step 5.5), and arming auto-merge (step 6a).
+- Do not use `gh` CLI for PR/issue operations — only `mcp__github__*`. The scoped exceptions are the project-board mutation (step 1.5), the code-review skill's own PR comment (step 5.5), arming auto-merge (step 6a), and creating a missing `PROD_ACTION_LABEL` (step 3.7).

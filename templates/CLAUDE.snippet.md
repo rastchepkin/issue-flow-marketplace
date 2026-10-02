@@ -16,8 +16,8 @@ truth. The flow is provided by the `issue-flow` plugin; project-specific values 
 2. **Work the issue.** `/issue-flow:work-on-issue <N>` — reads the issue, branches from `DEV_BRANCH`,
    runs the TDD loop, opens a PR with a mandatory `Closes #N`, waits for green CI, merges, auto-reports.
 3. **Wrap-up.** `/issue-flow:report` — one final comment on the issue (auto-invoked by work-on-issue).
-4. **Release.** `/issue-flow:push-to-prod` — opens a `DEV_BRANCH → PROD_BRANCH` PR with aggregated
-   `Closes #N` markers, waits for CI, merges as a **merge commit** (not squash).
+4. **Release.** `/issue-flow:push-to-prod` — opens a `DEV_BRANCH → PROD_BRANCH` PR listing the issues
+   it ships, stops for any manual prod steps they carry, waits for CI, merges as a **merge commit** (not squash).
 
 Creating local plan files (`.claude/plans/*`, `notes/*` for active tasks, any `*-plan.md` at the repo
 root) is **forbidden**. The plan lives in the issue.
@@ -35,6 +35,17 @@ issue touches, anything under `TEST_PROTECTED_PATHS`) always reaches a human, an
 scored by an isolated judge sub-agent against the issue's AC, the test diff, and the source diff.
 `low` is auto-accepted; `medium`/`high` stops and asks. Either way the change is recorded in the PR
 body's "Test changes" section and in the `/report` comment — nothing lands unrecorded.
+
+### Manual prod steps live on the issue
+
+When a task needs something done outside the code to go live — an env var, a secret, a hosting/infra
+setting, a one-off script — it is recorded in the issue body's `## Prod checklist` (`Before deploy:` /
+`After deploy:` checkboxes) and the issue gets the `prod:action-required` label (`PROD_ACTION_LABEL`).
+`/plan-issue` records what is known up front, `/work-on-issue` step 3.7 adds what the diff turns up,
+and **whenever such a step comes up in any conversation about an issue, record it on that issue right
+away** — nobody is expected to remember it. `/push-to-prod` collects the checklists into the release PR
+and does not merge until every *Before deploy* item is confirmed; the label is cleared once the issue's
+checklist is fully ticked. Name the variable and where it is set — never its value.
 
 ### The flow is resumable
 
@@ -93,7 +104,8 @@ runs in `<USER_LANGUAGE>` (also set as `USER_LANGUAGE` in `.claude/flow.config.m
   MCP returns structured responses and one source of truth.
 - `gh` is allowed for what MCP doesn't cover (local auth, repo variables/secrets setup) plus three
   scoped exceptions the commands document inline: the project-board GraphQL mutation, the code-review
-  skill's own PR comment, and arming auto-merge (`gh pr merge --auto`, which MCP cannot do).
+  skill's own PR comment, arming/disarming auto-merge (`gh pr merge --auto` / `--disable-auto`, which
+  MCP cannot do), and creating a missing flow label.
 
 ## Infrastructure we rely on
 

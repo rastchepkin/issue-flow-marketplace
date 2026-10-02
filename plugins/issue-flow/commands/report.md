@@ -87,6 +87,7 @@ Structure (English, 5 sections):
 
 ## Remaining
 <either "nothing, AC fully closed", or an explicit list of what is not done and why — e.g., split off into follow-up issue #M>
+<if the issue body has a `## Prod checklist`, add one line: "Manual prod steps: see `## Prod checklist` in the issue body — `/push-to-prod` gates the release on them." Do not copy the items here; the issue body is their single place.>
 ```
 
 Publish **immediately**, without preview and without asking the user:

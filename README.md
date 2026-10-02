@@ -39,6 +39,9 @@ discussion ──/issue-flow:plan-issue──▶ GitHub Issue ──/issue-flow:
                                                                               │
                                           /issue-flow:push-to-prod ──▶ DEV_BRANCH → PROD_BRANCH PR
                                                                               │
+                                  manual prod steps from the issues' ## Prod checklist?
+                                  ──▶ stop, user does them, confirms ──▶ continue
+                                                                              │
                                                   merge-commit → live in PROD_BRANCH
 ```
 

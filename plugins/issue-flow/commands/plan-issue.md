@@ -25,6 +25,7 @@ This command ships in the shared `issue-flow` plugin, so its body is stack-agnos
 - branch names → `DEV_BRANCH` / `PROD_BRANCH` (the literals `develop` / `main` in this file are placeholders)
 - the bug-report Environment section → list this project's actual runtime, not `Python, Django, Node`
 - backlog label → `BACKLOG_LABEL` (default `status:backlog`; blank disables the backlog marking entirely)
+- manual prod steps label → `PROD_ACTION_LABEL` (default `prod:action-required`; blank disables the prod checklist)
 - user-facing chat language → `USER_LANGUAGE`
 
 If `.claude/flow.config.md` is missing, stop and ask the user to create it from the plugin's `templates/flow.config.example.md`.
@@ -70,6 +71,9 @@ UX (если был /ux-explore)
 
 ВНЕ ЗАДАЧИ
 <что сознательно не делаем сейчас>
+
+РУЧНЫЕ ШАГИ В ПРОДЕ (если есть)
+<что придётся сделать руками вне кода: переменная окружения, секрет, настройка хостинга, разовый скрипт — и до или после деплоя; иначе строку опускаем>
 
 КОГДА
 Берём сейчас (Todo) / кладём в бэклог на потом (Backlog) — <твоя рекомендация в полстроки>
@@ -157,6 +161,8 @@ If needed — `mcp__github__pull_request_read` on the 1–2 most relevant to see
 - If context shows that **suitable utilities/layers already exist** — fix in "Proposed solution" "reuse `<module>`", so `/work-on-issue` does not produce duplicates.
 - If the task **changes a contract or removes behavior** (meaning `/work-on-issue` may need to edit/delete existing tests) — add an "Affected existing tests (preliminary)" section listing: which test and why it is expected to change. This gives `/work-on-issue` step 3.6 material for confirmation and makes review easier.
 
+- If the task **already needs a manual step outside the code** to go live (an env var, a secret, a hosting/infra setting, a one-off script) — add a `## Prod checklist` section at the end of the body with `Before deploy:` / `After deploy:` checkbox items, and add `PROD_ACTION_LABEL` to the labels in step 5. Name the variable and where it is set, never its value. `/work-on-issue` step 3.7 adds whatever the code turns up later, and `/push-to-prod` will not deploy until the **Before** items are done. Skip if `PROD_ACTION_LABEL` is blank.
+
 **For feature** — sections per `feature_request.yml`:
 
 ```markdown
@@ -177,6 +183,13 @@ If needed — `mcp__github__pull_request_read` on the 1–2 most relevant to see
 <optional, if the task changes a contract / removes behavior>
 - `path/to/test_file.py::test_name` — expected to delete/rewrite. Reason: <…>
 - …
+
+## Prod checklist
+<optional, only if a manual step outside the code is already known>
+Before deploy:
+- [ ] Set env `FOO_API_KEY` on the prod app
+After deploy:
+- [ ] Run `<one-off command>` once on prod
 ```
 
 **For bug** — sections per `bug_report.yml`:
@@ -210,9 +223,12 @@ mcp__github__issue_write(
   repo=<REPO>,
   title=<title>,
   body=<body>,
-  labels=["type:feature"]  // or ["type:bug"]; append <BACKLOG_LABEL> when the issue goes to the backlog
+  labels=["type:feature"]  // or ["type:bug"]; append <BACKLOG_LABEL> when the issue goes to the backlog,
+                           // and <PROD_ACTION_LABEL> when the body has a ## Prod checklist
 )
 ```
+
+A missing `PROD_ACTION_LABEL` is created the same way as the backlog label below: `gh label create <PROD_ACTION_LABEL> --color b60205 --description "Needs a manual step in production before/after release"`.
 
 **Backlog label.** Append `BACKLOG_LABEL` to `labels` when the issue is not being taken up now — i.e. when the step-0.3 **КОГДА** answer was "в бэклог", or when `-backlog` was passed, or when running under `-auto` without an explicit "берём сейчас". Skip it if `BACKLOG_LABEL` is blank in the config. The label must exist in the repo; if `issue_write` rejects it as unknown, create it once via `gh label create <BACKLOG_LABEL> --color ededed --description "Needed, but not scheduled yet"` and retry (a label mutation, not a PR/issue op — the same kind of scoped `gh` exception the sibling commands use).
 

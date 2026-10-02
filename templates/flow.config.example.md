@@ -69,6 +69,15 @@
      queue. Leave blank to disable backlog marking entirely. -->
 - BACKLOG_LABEL: status:backlog
 
+## Manual prod steps
+<!-- Label meaning "this issue needs a manual step outside the code to go live" — an env var, a secret,
+     a hosting/infra setting, a one-off script. The steps themselves live in the issue body's
+     `## Prod checklist` (Before deploy / After deploy checkboxes). /plan-issue and /work-on-issue
+     step 3.7 record them; /push-to-prod step 2.5 collects them into the release PR and will NOT merge
+     (or arm auto-merge) until every "Before deploy" item is confirmed. The label is cleared once the
+     issue's checklist is fully ticked. Leave blank to disable the whole mechanism. -->
+- PROD_ACTION_LABEL: prod:action-required
+
 ## Test-change judge (/issue-flow:work-on-issue step 3.6)
 <!-- Editing or deleting an EXISTING test can silently remove coverage. With TEST_JUDGE: on, an
      isolated read-only sub-agent judges each change against the issue's AC, the test diff and the

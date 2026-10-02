@@ -37,6 +37,7 @@ These become `.claude/flow.config.md`. Ask them together, with best-guess defaul
 | `AUTO_MERGE` | hand the merge to GitHub so the flow survives a dead session | **`false`** until Phase 6.5 is done; then `true` |
 | `TEST_PROTECTED_PATHS` | test globs that always need a human, judge or not | ask: auth / permissions / billing / migrations tests, if any |
 | `BACKLOG_LABEL` | label marking "needed, but not now" | `status:backlog` |
+| `PROD_ACTION_LABEL` | label marking "needs a manual prod step"; blank disables the release gate | `prod:action-required` |
 | `DEPLOY_VERIFY` | whether to poll a deploy after merge | default **`none`** unless the user has a deploy to verify |
 | `USER_LANGUAGE` | language of the commands' user-facing chat | ask; default English |
 
@@ -93,15 +94,18 @@ Copy from `templates/` into the repo (merge where a file exists):
 
 ## Phase 6 — GitHub-side wiring (needs `gh` + admin on the repo)
 
-1. **Issue labels** (the templates apply `type:feature` / `type:bug`; the other two are used by the flow itself):
+1. **Issue labels** (the templates apply `type:feature` / `type:bug`; the other three are used by the flow itself):
    ```bash
    gh label create "type:feature"  --color 1d76db --force
    gh label create "type:bug"      --color d73a4a --force
    gh label create "status:backlog" --color ededed --force --description "Needed, but not scheduled yet"
    gh label create "needs-decision" --color fbca04 --force --description "Parked by /batch-work - waiting on a human decision"
+   gh label create "prod:action-required" --color b60205 --force --description "Needs a manual step in production before/after release"
    ```
    `status:backlog` is applied by `/plan-issue` and removed by `/work-on-issue` step 1.5;
-   `needs-decision` is applied by `/batch-work` when it parks a PR instead of stalling the batch.
+   `needs-decision` is applied by `/batch-work` when it parks a PR instead of stalling the batch;
+   `prod:action-required` marks an issue whose `## Prod checklist` (env vars, secrets, infra settings,
+   one-off scripts) `/push-to-prod` must see done before it deploys.
 2. **PAT for the GitHub MCP server** — token with issue/PR/contents read-write (classic: `repo` +
    `read:org`; or fine-grained scoped to this repo). Put it in the env var referenced in `.mcp.json`.
    Verify the MCP server connects before relying on it.
