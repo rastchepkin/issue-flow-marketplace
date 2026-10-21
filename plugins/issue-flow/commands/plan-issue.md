@@ -26,7 +26,7 @@ This command ships in the shared `issue-flow` plugin, so its body is stack-agnos
 - the bug-report Environment section → list this project's actual runtime, not `Python, Django, Node`
 - backlog label → `BACKLOG_LABEL` (default `status:backlog`; blank disables the backlog marking entirely)
 - manual prod steps label → `PROD_ACTION_LABEL` (default `prod:action-required`; blank disables the prod checklist)
-- spec-driven tests → `SPEC_TESTS` (default `on`; `off` → write plain AC with no IDs and no `## Verification spec`)
+- spec-driven tests → `SPEC_TESTS` (default `on`; any value but `off` → write the spec here; `off` → plain AC with no IDs and no `## Verification spec`). A spec signed off here is stronger than the one `/work-on-issue` 3.0a drafts unattended for issues that lack it, so write it here whenever it applies.
 - user-facing chat language → `USER_LANGUAGE`
 
 If `.claude/flow.config.md` is missing, stop and ask the user to create it from the plugin's `templates/flow.config.example.md`.

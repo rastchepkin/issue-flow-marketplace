@@ -30,7 +30,10 @@ case it escalates instead.
 ### Tests come from the spec, not from the code
 
 `/plan-issue` numbers the AC (`AC-1…`) and adds a `## Verification spec` with risks (`RISK-*`), edge
-cases (`EDGE-*`), invariants (`INV-*`) and the interface tests may rely on. `/work-on-issue` step 3.0
+cases (`EDGE-*`), invariants (`INV-*`) and the interface tests may rely on. An issue without one
+(older or hand-written) gets a draft from a separate sub-agent at `/work-on-issue` step 3.0a, written
+back to the issue and marked "not reviewed by a human" (`SPEC_TESTS: confirm` makes the flow wait
+for approval instead). `/work-on-issue` step 3.0
 has an **isolated test-author sub-agent** write tests from that spec *before* any code. It sees only
 the issue, never the implementer's plan. Each test is tagged `spec: #N/<ID>`, committed as
 `test(spec): …`, and then **frozen**: the implementer makes the tests green and must not touch them

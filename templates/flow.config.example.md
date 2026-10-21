@@ -97,7 +97,12 @@
      `## Verification spec` (RISK-*, EDGE-*, INV-*, Interface). /work-on-issue then has an ISOLATED
      sub-agent write tagged tests (`spec: #N/AC-1`) from that spec before any code exists, freezes
      them (any edit by the implementer hits the step-3.6 deny-list, which -bypass cannot relax), and
-     checks deterministically that every ID has a test. Issues without IDs use plain TDD. -->
+     checks deterministically that every ID has a test.
+     Issues WITHOUT a spec (older ones, hand-written ones):
+        on        (default) a separate sub-agent drafts the spec, writes it to the issue, flow continues
+        confirm   same, but the flow waits for you to approve/edit the drafted spec
+        existing  only issues that already carry a spec get spec tests; the rest use plain TDD
+        off       no spec tests anywhere; /plan-issue writes plain AC -->
 - SPEC_TESTS: on
 - SPEC_AUTHOR_MODEL: opus    <!-- the author defines "done"; same reasoning as the judge, so do not cheap out -->
 - SPEC_MUTATION: on          <!-- step 3.8: mutation over changed lines, and the AUTHOR adds tests that kill

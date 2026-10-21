@@ -31,7 +31,7 @@ This command ships in the shared `issue-flow` plugin, so its body is stack-agnos
 - CI check to wait on → `CI_CHECK_NAME`
 - review steps → `CODE_REVIEW_SKILL` / `SECURITY_REVIEW` (skip a step whose value is `none`)
 - test-change judge → `TEST_JUDGE`, `TEST_JUDGE_MODEL`, `TEST_PROTECTED_PATHS` (step 3.6)
-- spec-driven tests → `SPEC_TESTS`, `SPEC_AUTHOR_MODEL` (steps 3.0, 3.9), `SPEC_MUTATION` (step 3.8, which also needs the `MUTATION_*` keys)
+- spec-driven tests → `SPEC_TESTS` (`on` | `confirm` | `existing` | `off`), `SPEC_AUTHOR_MODEL` (steps 3.0, 3.9), `SPEC_MUTATION` (step 3.8, which also needs the `MUTATION_*` keys)
 - backlog label → `BACKLOG_LABEL` (step 1.5)
 - manual prod steps label → `PROD_ACTION_LABEL` (step 3.7; blank disables it)
 - merge strategy → `AUTO_MERGE` (step 6)
@@ -147,7 +147,7 @@ Combine that with the report-comment signal from step 1 and re-enter at the matc
 | Observed state | Re-enter at |
 |---|---|
 | no remote branch, no PR | **step 2** below — create the branch |
-| remote branch, no PR | checkout the branch; **step 3.0** if the spec applies and the branch has no `test(spec):` commit yet, else **step 3** — finish the work |
+| remote branch, no PR | checkout the branch; **step 3.0** if the spec applies and the branch has no `test(spec):` commit yet (a spec already written to the issue by 3.0a is reused, not redrafted), else **step 3** — finish the work |
 | PR **open**, no code-review comment on it | **step 5.5** |
 | PR **open**, code-review comment present | **step 5.6** (the security review always re-runs on resume — it leaves no artifact to detect, and re-running a hard gate is the safe direction) |
 | PR **merged**, no `/report` comment on the issue | **step 8** |
@@ -170,7 +170,56 @@ git checkout -b <type>/$ARGUMENTS-<kebab-summary>
 
 **Why.** When the agent that writes the code also writes the tests, the tests tend to confirm the code it is about to write rather than the requirement. Mutation testing does not fix this: it only measures assertions against code that exists, and is blind to requirements nobody tested. So the tests that define "done" are written **first**, by a **separate sub-agent**, from the issue's requirements, risks, edge cases and invariants, and the implementer may not change them.
 
-**When it runs.** Only if `SPEC_TESTS` is `on` (the default when the key is absent) **and** the issue body has IDs to trace: AC written as `AC-<n>:` and/or a `## Verification spec` section (`/plan-issue` writes both). Otherwise skip to step 3 and use the plain TDD loop. Docs/config/pure-refactor issues normally carry no spec.
+**When it runs.** Whenever `SPEC_TESTS` is not `off`. The value decides what happens when the issue has **no spec yet**, meaning no `AC-<n>:` IDs and no `## Verification spec` (typical for issues written before this flow, or by hand):
+
+| `SPEC_TESTS` | Issue has a spec | Issue has no spec |
+|---|---|---|
+| `on` (**default**, also when the key is absent) | use it | **draft it** (3.0a), write it to the issue, **continue** |
+| `confirm` | use it | draft it (3.0a), write it to the issue, **stop** and ask the user to approve or edit it, then continue |
+| `existing` | use it | plain TDD loop (step 3), no spec tests |
+| `off` | plain TDD loop | plain TDD loop |
+
+#### 3.0a. Draft the spec when the issue has none
+
+The spec decides what gets tested. If the implementer wrote it, it would shape the requirements around the code it plans to write, which is the same circularity as writing its own tests. So the draft comes from a **separate** sub-agent (`subagent_type=claude`, `model=<SPEC_AUTHOR_MODEL>`). Give it the issue and the repo, and nothing of your own:
+
+```
+You are the SPEC WRITER for issue #<N> in this repo. Another agent will turn your spec into tests, and a third will implement the change. Neither may change your output. Do not write tests or code.
+
+The issue (body + all comments, verbatim):
+<…>
+
+1. Decide if a spec applies. It does NOT apply to docs-only, config-only, or pure refactors with no behavior change. Then return {"applicable":false,"why":"…"} and stop.
+2. Read the code the issue touches, AND its callers and the tests that cover it. In an existing codebase the main risk is breaking adjacent behavior, and only the code shows you where that is.
+3. Write:
+   - AC: number the issue's existing acceptance criteria `AC-1…` in their current order. Keep the wording. Only fix a criterion that cannot be observed from outside, and say that you did. If the issue has no AC, derive them from the issue text only. Never add scope.
+   - RISK-n [high|medium|low]: how this change could ship broken or be abused. Wrong permission, race, partial failure, data loss, and especially regressions of the existing behavior you found in step 2 (name the caller/behavior).
+   - EDGE-n: exact boundaries (empty/one/max, == at a limit, duplicates, unicode, timezone, concurrent, retry).
+   - INV-n: rules that must hold for every input or sequence.
+   - Interface: the public names tests may rely on, marked (existing) or (new).
+   - Mark anything not automatable `(manual: <reason>)`.
+   Keep it proportional. A small task gets 2–4 items in total.
+4. If the issue is too ambiguous to state an AC, do not guess. Put the question under "unclear".
+
+Return exactly one JSON object, nothing else:
+{"applicable":true,
+ "ac":["AC-1: …", …],
+ "spec_markdown":"Risks\n- RISK-1 [high]: …\nEdge cases\n- EDGE-1: …\nInvariants\n- INV-1: …\nInterface (what tests may rely on)\n- `…` (existing)",
+ "reworded_ac":[{"id":"AC-2","was":"…","now":"…","why":"…"}],
+ "unclear":[{"question":"<either/or question>"}]}
+```
+
+Act on it:
+
+- `applicable: false` → plain TDD loop (step 3). Record `Spec not applicable: <why>` for the PR body.
+- `unclear` is non-empty → AC-ambiguity fork (Mode). Ask the user, then re-run the writer with the answer added to the issue.
+- Otherwise **write it to the issue**. Prefix the existing AC lines with their IDs in place, and append `## Verification spec` with `spec_markdown` plus a first line `_Auto-drafted by an isolated sub-agent in /work-on-issue; not reviewed by a human._`. Use `mcp__github__issue_write(method=update, …)` and leave every other part of the body exactly as it was. Re-read the issue, which is now the spec the author works from.
+- `SPEC_TESTS: on` → tell the user one line in `USER_LANGUAGE` (`Спецификации в задаче не было — составил черновик (<k> пунктов), записал в #N, продолжаю. Поправить можно в issue.`). List any `reworded_ac`, and continue to the author below.
+- `SPEC_TESTS: confirm` → show the spec in plain words (the step-0.3 "ЧТО МОЖЕТ СЛОМАТЬСЯ И ЧТО ПРОВЕРИМ" shape from `/plan-issue`) plus `reworded_ac`, and wait. On edits, update the issue and re-show. On "ок", remove the "not reviewed" line and continue.
+
+A spec drafted here is weaker than one a human signed off in `/plan-issue`. That is why it is written to the issue, where anyone can read and fix it, and why the PR body and the report say where the spec came from.
+
+#### 3.0b. Write the spec tests
 
 **IDs.** The traceable items are `AC-<n>`, `RISK-<n>`, `EDGE-<n>`, `INV-<n>`, as declared in the issue. An item annotated `(manual: <reason>)` is not automatable and gets no test. Every spec test carries a tag comment in the test language's comment syntax, naming the issue and one or more IDs:
 
@@ -550,6 +599,7 @@ Closes #$ARGUMENTS
 
 ## Traceability
 <only if step 3.0 ran; omit otherwise>
+Spec source: from the issue (`/plan-issue`, human sign-off) | auto-drafted at step 3.0a, not reviewed by a human | auto-drafted and approved by the user (`confirm`).
 Spec tests by an isolated author: `<SPEC_SHA short>` (+ hardening `<sha>` if step 3.8 committed). Frozen: not edited by the implementer.
 
 | ID | Requirement / risk (short) | Tests | Status |
@@ -754,7 +804,8 @@ If the run instead ended at step 6a's hand-off (PR armed for auto-merge, CI stil
 - Never let the step-3.6 deny-list be relaxed by `-bypass`.
 - Never write a secret **value** into the issue, the PR, or a commit — the prod checklist names the variable and where to set it, nothing more.
 - Never pass the implementer's reasoning to the test judge — it must judge from the issue and the diffs alone.
-- Never pass your approach, plan, or file list to the spec-test author (steps 3.0, 3.8, 3.9). It works from the issue alone.
+- Never pass your approach, plan, or file list to the spec writer or the spec-test author (steps 3.0a, 3.0b, 3.8, 3.9). They work from the issue alone.
+- Never write or edit the verification spec yourself. If it is missing, the 3.0a writer drafts it. If it is wrong, the user fixes it on the issue.
 - Never edit, delete, skip, or move a frozen spec-test file, and never author a `test(spec):` commit yourself. That subject is reserved for the spec author, and the spec-lock check trusts it.
 - Do not create files in `.claude/plans/`, `notes/` (for an active task), or `*-plan.md` at the repo root.
 - Do not use `gh` CLI for PR/issue operations — only `mcp__github__*`. The scoped exceptions are the project-board mutation (step 1.5), the code-review skill's own PR comment (step 5.5), arming auto-merge (step 6a), and creating a missing `PROD_ACTION_LABEL` (step 3.7).

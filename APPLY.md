@@ -36,7 +36,7 @@ These become `.claude/flow.config.md`. Ask them together, with best-guess defaul
 | `CODE_REVIEW_SKILL` / `SECURITY_REVIEW` | review steps in work-on-issue, or `none` | `code-review:code-review` / `/security-review` if those skills exist, else `none` |
 | `AUTO_MERGE` | hand the merge to GitHub so the flow survives a dead session | **`false`** until Phase 6.5 is done; then `true` |
 | `TEST_PROTECTED_PATHS` | test globs that always need a human, judge or not | ask: auth / permissions / billing / migrations tests, if any |
-| `SPEC_TESTS` / `SPEC_AUTHOR_MODEL` / `SPEC_MUTATION` | spec-driven tests: an isolated author writes frozen, traceable tests from the issue's spec; mutation survivors go back to that author | `on` / `opus` / `on` (mutation self-skips while `MUTATION_*` tools are `none`) |
+| `SPEC_TESTS` / `SPEC_AUTHOR_MODEL` / `SPEC_MUTATION` | spec-driven tests: an isolated author writes frozen, traceable tests from the issue's spec; mutation survivors go back to that author | `on` (issues without a spec get one auto-drafted; `confirm` to approve drafts, `existing` to skip them) / `opus` / `on` (mutation self-skips while `MUTATION_*` tools are `none`) |
 | `BACKLOG_LABEL` | label marking "needed, but not now" | `status:backlog` |
 | `PROD_ACTION_LABEL` | label marking "needs a manual prod step"; blank disables the release gate | `prod:action-required` |
 | `DEPLOY_VERIFY` | whether to poll a deploy after merge | default **`none`** unless the user has a deploy to verify |
