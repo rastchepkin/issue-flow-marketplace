@@ -52,6 +52,7 @@ This is an **autonomous flow** in the spirit of a Replit-style agent. By default
 - request for an action outside issue scope (new DB migrations, removal of public API, CI/infra changes);
 - CI check failed for a reason that cannot be fixed by a local patch (e.g., secrets/environment);
 - **modification or deletion of existing tests judged `medium`/`high` risk**, or hitting the deny-list — gated at step 3.6. Adding new tests is always fine, no confirmation needed.
+- **a requirement is untestable in the current code and the seam that would fix it is `large`**, or nothing around it can be pinned first (step 3.0c). The fork is a preparatory issue versus accepting the gap.
 - **a spec test (step 3.0) looks wrong to you**, or cannot be made green without contradicting another one — that is an AC/spec ambiguity, not a test problem. Never edit a spec test to get past it (see step 3).
 - **the security review flagged a security problem** (see step 5.6) — never auto-fix-and-merge a security finding; surface it to the user and stop. Only an **actual finding** is the fork: a **clean** security review is **not** a stop point — it is a pass-through, keep going to CI/merge in the same turn without pausing.
 
@@ -147,7 +148,7 @@ Combine that with the report-comment signal from step 1 and re-enter at the matc
 | Observed state | Re-enter at |
 |---|---|
 | no remote branch, no PR | **step 2** below — create the branch |
-| remote branch, no PR | checkout the branch; **step 3.0** if the spec applies and the branch has no `test(spec):` commit yet (a spec already written to the issue by 3.0a is reused, not redrafted), else **step 3** — finish the work |
+| remote branch, no PR | checkout the branch; **step 3.0** if the spec applies and the branch has no `test(spec):` commit yet (a spec already written to the issue by 3.0a is reused, not redrafted). If a `test(char):` commit exists, resume 3.0c at the first missing commit: seam `refactor:`, then the second `test(spec):`. Else **step 3** — finish the work |
 | PR **open**, no code-review comment on it | **step 5.5** |
 | PR **open**, code-review comment present | **step 5.6** (the security review always re-runs on resume — it leaves no artifact to detect, and re-running a hard gate is the safe direction) |
 | PR **merged**, no `/report` comment on the issue | **step 8** |
@@ -251,26 +252,74 @@ Rules:
 2. Tag every test with a comment `spec: #<N>/<ID>[, #<N>/<ID>…]`. A test with no tag is not a spec test. Do not write one.
 3. Assert the specific outcome: exact values, error types, state after the call. A test that only checks "no exception", "is not None" or "called once" is not acceptable unless that IS the requirement.
 4. Test through the interface the issue names (its `Interface` list, or the modules in "Proposed solution"). Follow the existing test layout, fixtures and naming. Put spec tests in their own new test files (e.g. `test_<feature>_spec.*`), never in existing test files.
-5. Do not write or edit any non-test file. Do not create stubs of the code under test.
+   Substitute only TRUE external boundaries (network, third-party APIs, clock, randomness, filesystem outside the project), and only through mechanisms the project already has (existing fixtures, test settings, libraries already in its dependencies). Never patch internals of the code under test: its private functions, the names it imports, or its ORM/DB calls. Your tests are frozen. A test that breaks when the implementation is restructured without changing behavior would block every correct implementation, so it is not a spec test.
+5. Do not write or edit any non-test file. Do not create stubs of the code under test. If an ID cannot be tested without that, do not force it. Follow rule 9.
 6. Run the new tests. Each one must FAIL for the right reason:
    - acceptable: the assertion fails, or the symbol is missing BECAUSE the issue declares it as new;
    - not acceptable: syntax errors, broken fixtures, wrong import paths for code that already exists, a typo'd existing API. Fix those.
    A test that already PASSES means the behavior already exists or the test is vacuous. Decide which. If vacuous, rewrite it. If the behavior exists (common for RISK/INV that the old code already guards), keep it as a regression guard and list it under `already_green`.
 7. If an ID is too vague to test, do not invent a meaning. List it under `unclear` with the question that would resolve it.
 8. Commit only your test files, with the subject `test(spec): #<N> <short summary>`. Do not push.
+9. UNTESTABLE. Existing code sometimes gives a test nothing to hold on to: `now()` called inline, a hard-coded HTTP client, a global singleton, logic buried in a handler with DB and network calls, work done at import time. For such an ID:
+   a. First try a HIGHER level: drive the public entry point (HTTP endpoint, CLI, page, public service function) with the project's existing integration/e2e fixtures. A slower honest test beats a fast fake one. If that works, write it there and the ID is covered.
+   b. Only if no level works, list the ID under `untestable` and write no test for it:
+      - blocker: what prevents control or observation, with file:line;
+      - seam: the MINIMAL behavior-preserving change that would make it testable (e.g. "extract the discount calculation from orders/views.py:70-110 into a pure `calc_discount(order, now)` in orders/pricing.py; the view calls it with `timezone.now()`"). Name the exact signature your test would use;
+      - size: `small` = one or two files, no public API or schema change, a mechanical extraction or a parameter with a default; anything else is `large`;
+      - higher_level: why (a) did not work.
+   Still cover every other ID normally.
 
 Return exactly one JSON object as your final message, nothing else:
 {"commit":"<sha>","files":["<path>",…],
  "tests":[{"id":"AC-1","test":"<file>::<name>","red_reason":"<assertion | missing new symbol `X`>"}],
  "already_green":[{"id":"RISK-2","test":"<file>::<name>","why":"<behavior already exists>"}],
- "unclear":[{"id":"EDGE-3","question":"<either/or question>"}]}
+ "unclear":[{"id":"EDGE-3","question":"<either/or question>"}],
+ "untestable":[{"id":"EDGE-1","blocker":"<file:line — what>","seam":"<minimal change + exact signature>","size":"small|large","higher_level":"<why not>"}]}
 ```
 
 **Act on the result.**
 
 - `unclear` is non-empty → that is an AC-ambiguity fork (Mode). Stop and ask the user, one either/or question per ID, with your recommendation. Once they answer, update the issue body with the answer and re-run the author for those IDs only.
 - Otherwise check it yourself: the commit exists and touches only test files, and `TEST_CMD` on those files fails, and only in the tests it listed as red. Save the commit as `<SPEC_SHA>` and the file list as `<SPEC_FILES>`. From here on these files are **frozen** (steps 3 and 3.6).
-- Tell the user one line: `Спецификационные тесты: <k> тестов на <m> требований, заморожены (<SPEC_SHA short>).` (in `USER_LANGUAGE`).
+- `untestable` is non-empty → step 3.0c before the TDD loop. Any `large` item makes it a stop (see 3.0c).
+- Tell the user one line: `Спецификационные тесты: <k> тестов на <m> требований, заморожены (<SPEC_SHA short>).` (in `USER_LANGUAGE`), plus `Нетестируемо в текущем коде: <ids> — делаю шов (3.0c).` when it applies.
+
+#### 3.0c. Make untestable code testable: pin it, add the seam, then test it
+
+Old code that is hard to test is also unsafe to change: whatever the seam refactor breaks, nothing will notice. So the order is fixed. **First pin** the behavior around the seam, **then change** the code, **then test** the requirement.
+
+**Large seam → stop.** If any `untestable` item is `large`, this is a scope expansion (Mode). Do not start it inside this issue. Tell the user in `USER_LANGUAGE`, plain words: which requirement cannot be tested in the current code, why (the `blocker`), and what would make it testable (the `seam`). Then offer the either/or, with a recommendation:
+
+- **A (recommended)** — a separate preparatory issue "make <area> testable". It has its own verification spec, in which "behavior does not change" is the AC and the pinned behavior is RISK. It blocks this one. Offer to create it with `/issue-flow:plan-issue`.
+- **B** — accept the gap: mark the ID `(manual: untestable in current code, see #<prep issue or reason>)` in the issue and continue.
+
+**Small seam → do it here, in three commits:**
+
+1. **Pin (characterization tests).** Dispatch the author again, with the same isolation, but with this prompt instead:
+
+   ```
+   You are the TEST AUTHOR for issue #<N>. Before code at <the seams' files and line ranges> is refactored, pin its CURRENT observable behavior so the refactor cannot silently change it.
+
+   The issue (body + all comments, verbatim): <…>
+   The planned seams (from your earlier report): <untestable items verbatim>
+
+   - Test from the level that reaches this code TODAY (its public entry point), with the same boundary rules as before: substitute only true external boundaries, and never patch internals.
+   - Pin behavior the issue does NOT change: the outputs, errors and side effects the refactor must preserve. Do not pin behavior the issue's AC change. That would freeze the old behavior the feature is supposed to replace.
+   - The tests must PASS against the current code. If one fails, you pinned something wrong. Fix the test, not the code.
+   - Tag each test `char: #<N>` (not `spec:`), put them in new files (e.g. `test_<area>_characterization.*`), and commit only those files as `test(char): #<N> pin <area> before seam`. Do not push.
+   - If nothing around the seam is reachable from any level, return {"files":[],"why":"…"}. Do not fake it.
+
+   Return exactly one JSON object, nothing else:
+   {"commit":"<sha or null>","files":["<path>",…],"pinned":["<behavior in plain words>",…],"why":"<only when files is empty>"}
+   ```
+
+   Verify that the commit touches only test files and that the new tests pass on the current code. Add the returned files to `<SPEC_FILES>`. They are frozen too, and they stay as permanent regression guards. If every ID was untestable, so 3.0b committed nothing, `<SPEC_SHA>` is this `test(char):` commit. If nothing could be pinned, treat the seam as `large` (stop as above): a refactor with no safety net is exactly what this step exists to prevent.
+
+2. **Seam (you).** Make **exactly** the change the `seam` describes, with the signature it names, as a behavior-preserving refactor. No feature work, and no edits to any test. `TEST_CMD` must be fully green, including the characterization tests. Commit as `refactor: #<N> seam for <area>`. If you cannot keep the characterization tests green, revert and stop: the refactor is not behavior-preserving, and that is the user's call.
+
+3. **Test (author).** Re-run the 3.0b author for **only** the formerly untestable IDs. Use its normal prompt, plus one fact: `The seam now exists: <seam signature and file>.` Its commit is another `test(spec):` commit. Add its files to `<SPEC_FILES>`. If an ID is *still* untestable, stop and ask.
+
+Then continue to the TDD loop. The characterization tests, the seam commit, and the pinned behaviors all go into the PR body's Traceability section.
 
 ### 3. TDD loop
 
@@ -332,10 +381,10 @@ If it contains **only additions** — new test files, or new test cases in exist
 **Spec-lock check** (only when step 3.0 ran):
 
 ```bash
-git log --format='%h %s' <SPEC_SHA>..HEAD -- <SPEC_FILES> | grep -v ' test(spec): ' || true
+git log --format='%h %s' <SPEC_SHA>..HEAD -- <SPEC_FILES> | grep -vE ' test\((spec|char)\): ' || true
 ```
 
-Any output means a commit other than the spec author's touched a frozen spec file. That is a deny-list hit. The same applies to uncommitted changes to those files (`git status --porcelain -- <SPEC_FILES>`).
+Any output means a commit other than the spec author's touched a frozen spec or characterization file. That is a deny-list hit. The same applies to uncommitted changes to those files (`git status --porcelain -- <SPEC_FILES>`).
 
 #### 3.6a. Deny-list — always escalates to the user
 
@@ -608,6 +657,7 @@ Spec tests by an isolated author: `<SPEC_SHA short>` (+ hardening `<sha>` if ste
 | RISK-1 | <…> | `path::test_name`, `path::test_other` | ✅ |
 | EDGE-2 | <…> | — | manual: <reason> |
 
+Seams (step 3.0c, omit if none): `<area>` — blocker <file:line>; pinned first by <k> characterization tests (`<test(char) sha>`), refactored in `<refactor sha>`; pinned behavior: <plain-words list>.
 Mutation (changed lines): <score_before> → <score_after>; equivalent: <n>. <or "Mutation hardening skipped: <reason>" / "not configured">
 Spec gaps (behavior no requirement covers): <list from step 3.8, or "none">
 
@@ -806,6 +856,7 @@ If the run instead ended at step 6a's hand-off (PR armed for auto-merge, CI stil
 - Never pass the implementer's reasoning to the test judge — it must judge from the issue and the diffs alone.
 - Never pass your approach, plan, or file list to the spec writer or the spec-test author (steps 3.0a, 3.0b, 3.8, 3.9). They work from the issue alone.
 - Never write or edit the verification spec yourself. If it is missing, the 3.0a writer drafts it. If it is wrong, the user fixes it on the issue.
-- Never edit, delete, skip, or move a frozen spec-test file, and never author a `test(spec):` commit yourself. That subject is reserved for the spec author, and the spec-lock check trusts it.
+- Never edit, delete, skip, or move a frozen spec-test or characterization file, and never author a `test(spec):` or `test(char):` commit yourself. Those subjects are reserved for the spec author, and the spec-lock check trusts them.
+- Never do a seam refactor (step 3.0c) before its characterization tests are committed and green, and never make it bigger than the `seam` the author named.
 - Do not create files in `.claude/plans/`, `notes/` (for an active task), or `*-plan.md` at the repo root.
 - Do not use `gh` CLI for PR/issue operations — only `mcp__github__*`. The scoped exceptions are the project-board mutation (step 1.5), the code-review skill's own PR comment (step 5.5), arming auto-merge (step 6a), and creating a missing `PROD_ACTION_LABEL` (step 3.7).

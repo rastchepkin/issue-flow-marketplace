@@ -38,7 +38,12 @@ has an **isolated test-author sub-agent** write tests from that spec *before* an
 the issue, never the implementer's plan. Each test is tagged `spec: #N/<ID>`, committed as
 `test(spec): …`, and then **frozen**: the implementer makes the tests green and must not touch them
 (an edit is a deny-list hit; `-bypass` does not relax it). Step 3.8 runs mutation testing on changed
-lines and sends survivors back to the **author**, never the implementer. Step 3.9 checks with plain
+lines and sends survivors back to the **author**, never the implementer. When existing code gives a
+requirement nothing to test against (inline `now()`, a hard-wired client, logic buried in a handler),
+the author reports it `untestable` with a minimal seam. A small seam is done in this issue in a fixed
+order: characterization tests pin the surrounding behavior (`test(char):`), then the implementer does
+a behavior-preserving `refactor:`, and only then come the spec tests. A large seam stops and is
+proposed as a separate preparatory issue. Step 3.9 checks with plain
 grep that every ID has a test, and the resulting matrix goes into the PR and the `/report`. If a spec
 test looks wrong, ask the user and change the spec on the issue. Never "fix" the test.
 
