@@ -20,7 +20,25 @@ body:
     attributes:
       label: Acceptance criteria
       value: |
-        - [ ]
-        - [ ]
+        - [ ] AC-1:
+        - [ ] AC-2:
     validations:
       required: true
+  - type: textarea
+    id: spec
+    attributes:
+      label: Verification spec
+      description: >-
+        What tests must prove. An isolated agent writes one tagged test per ID before any code exists,
+        and the implementer may not change them. Skip for docs/config-only changes.
+      value: |
+        Risks
+        - RISK-1 [high|medium|low]:
+        Edge cases
+        - EDGE-1:
+        Invariants
+        - INV-1:
+        Interface (what tests may rely on)
+        -
+    validations:
+      required: false

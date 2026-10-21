@@ -26,6 +26,7 @@ This command ships in the shared `issue-flow` plugin, so its body is stack-agnos
 - the bug-report Environment section → list this project's actual runtime, not `Python, Django, Node`
 - backlog label → `BACKLOG_LABEL` (default `status:backlog`; blank disables the backlog marking entirely)
 - manual prod steps label → `PROD_ACTION_LABEL` (default `prod:action-required`; blank disables the prod checklist)
+- spec-driven tests → `SPEC_TESTS` (default `on`; `off` → write plain AC with no IDs and no `## Verification spec`)
 - user-facing chat language → `USER_LANGUAGE`
 
 If `.claude/flow.config.md` is missing, stop and ask the user to create it from the plugin's `templates/flow.config.example.md`.
@@ -66,8 +67,14 @@ UX (если был /ux-explore)
 <1–2 строки: какой элемент/экран/флоу выбрали; иначе строку опускаем>
 
 КРИТЕРИИ ПРИЁМКИ (AC)
-- [ ] <измеримый критерий 1>
-- [ ] <измеримый критерий 2>
+- [ ] AC-1: <измеримый критерий 1>
+- [ ] AC-2: <измеримый критерий 2>
+
+ЧТО МОЖЕТ СЛОМАТЬСЯ И ЧТО ПРОВЕРИМ (если есть спецификация)
+Риски: RISK-1 <что пойдёт не так, насколько плохо>; …
+Граничные случаи: EDGE-1 <пустое / максимум / одновременно / ровно на границе>; …
+Всегда должно выполняться: INV-1 <правило, которое не нарушается никогда>; …
+(по каждому пункту отдельный агент напишет тест до кода — допиши, если чего-то не хватает)
 
 ВНЕ ЗАДАЧИ
 <что сознательно не делаем сейчас>
@@ -161,6 +168,17 @@ If needed — `mcp__github__pull_request_read` on the 1–2 most relevant to see
 - If context shows that **suitable utilities/layers already exist** — fix in "Proposed solution" "reuse `<module>`", so `/work-on-issue` does not produce duplicates.
 - If the task **changes a contract or removes behavior** (meaning `/work-on-issue` may need to edit/delete existing tests) — add an "Affected existing tests (preliminary)" section listing: which test and why it is expected to change. This gives `/work-on-issue` step 3.6 material for confirmation and makes review easier.
 
+- **Write a verification spec** (unless `SPEC_TESTS` is `off`, or the task is docs / config / a pure refactor with no behavior change). `/work-on-issue` step 3.0 gives this spec to an **isolated test-author sub-agent**, which writes the tests *before* the code. The implementer may not change those tests, and step 3.9 checks that every ID has one. So the spec is the ceiling on test quality: an item missing here will not be tested by anyone. Rules:
+  - **Number the AC**: `- [ ] AC-1: …`. Each one must be observable from outside (an output, a state, an error, a response), not "code is clean".
+  - **Risks** (`RISK-n [high|medium|low]`) are the most important part, and the part agents skip. Ask "how could this ship broken, or be abused?": wrong permission, race, double submit, partial failure, data loss, regression of adjacent behavior. Write the failure itself, not the defence.
+  - **Edge cases** (`EDGE-n`): the exact boundaries. Empty / one / max, `==` at a limit, duplicates, unicode, timezone, concurrent, retry.
+  - **Invariants** (`INV-n`): rules that hold for *every* input or sequence ("balance never negative", "a user has at most one active token"). These become property-style tests.
+  - **Interface**: the public names (functions, endpoints, components, error types) the tests may rely on, existing or new. Without this, the test author has to guess the API.
+  - Something that cannot be automated (visual polish, copy tone) is marked `(manual: <reason>)`. It stays on the list but gets no test.
+  - IDs are stable once the issue exists. Never renumber. Add new ones at the end.
+  - For a **bug**: `AC-1` is "the reproduction from Steps to reproduce now gives Expected behavior". Add `RISK-*` for the adjacent behavior the fix could break.
+  - Keep it proportional. A small task gets 2–4 items in total, not a form filled out for its own sake.
+
 - If the task **already needs a manual step outside the code** to go live (an env var, a secret, a hosting/infra setting, a one-off script) — add a `## Prod checklist` section at the end of the body with `Before deploy:` / `After deploy:` checkbox items, and add `PROD_ACTION_LABEL` to the labels in step 5. Name the variable and where it is set, never its value. `/work-on-issue` step 3.7 adds whatever the code turns up later, and `/push-to-prod` will not deploy until the **Before** items are done. Skip if `PROD_ACTION_LABEL` is blank.
 
 **For feature** — sections per `feature_request.yml`:
@@ -173,8 +191,19 @@ If needed — `mcp__github__pull_request_read` on the 1–2 most relevant to see
 <what and how we do it, which files/modules are touched>
 
 ## Acceptance criteria
-- [ ] <measurable criterion 1>
-- [ ] <measurable criterion 2>
+- [ ] AC-1: <measurable criterion 1>
+- [ ] AC-2: <measurable criterion 2>
+
+## Verification spec
+<omit for docs/config/pure-refactor tasks, or when SPEC_TESTS is off>
+Risks
+- RISK-1 [high]: <what goes wrong, observable> 
+Edge cases
+- EDGE-1: <exact boundary>
+Invariants
+- INV-1: <rule that holds for every input/sequence>
+Interface (what tests may rely on)
+- `<module.function(args) -> result>`, raises `<Error>` (new | existing)
 
 ## Implementation plan (draft)
 <optional: 3–6 plan bullets — memory for the next session>
@@ -208,6 +237,12 @@ After deploy:
 
 ## Environment
 Python, Django, Node, OS, prod/local
+
+## Acceptance criteria
+- [ ] AC-1: following Steps to reproduce now gives Expected behavior
+
+## Verification spec
+<same shape as for a feature: RISK-* for the adjacent behavior the fix could break, EDGE-*, INV-*, Interface>
 ```
 
 Title — short, to the point, English, prefixed with `[feat]` or `[bug]`.
@@ -239,5 +274,6 @@ Return the user the number and URL of the created issue in one line, and say whi
 ## Forbidden
 
 - Do not create files in `.claude/plans/`, `notes/` (for an active task), or `*-plan.md` at the repo root. The plan lives **only** in the issue body.
+- Do not write the tests, or test code, into the issue. The spec says *what* must hold. The test author decides *how* to check it.
 - Do not use `gh issue create` — only `mcp__github__issue_write`. The one scoped `gh` exception is creating a missing `BACKLOG_LABEL` (step 5), which is a label mutation, not an issue operation.
 - Under `-auto`, do not show a preview before creation when the discussion is clear — that mode is autonomous. (Default mode is the opposite: the step 0.3 sign-off is required before creating.)

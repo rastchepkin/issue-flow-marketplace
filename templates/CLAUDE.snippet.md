@@ -27,6 +27,18 @@ sub-agent. An issue that needs a human decision is **parked** (branch pushed, PR
 `needs-decision`) and the batch continues — unless a later issue in the list depends on it, in which
 case it escalates instead.
 
+### Tests come from the spec, not from the code
+
+`/plan-issue` numbers the AC (`AC-1…`) and adds a `## Verification spec` with risks (`RISK-*`), edge
+cases (`EDGE-*`), invariants (`INV-*`) and the interface tests may rely on. `/work-on-issue` step 3.0
+has an **isolated test-author sub-agent** write tests from that spec *before* any code. It sees only
+the issue, never the implementer's plan. Each test is tagged `spec: #N/<ID>`, committed as
+`test(spec): …`, and then **frozen**: the implementer makes the tests green and must not touch them
+(an edit is a deny-list hit; `-bypass` does not relax it). Step 3.8 runs mutation testing on changed
+lines and sends survivors back to the **author**, never the implementer. Step 3.9 checks with plain
+grep that every ID has a test, and the resulting matrix goes into the PR and the `/report`. If a spec
+test looks wrong, ask the user and change the spec on the issue. Never "fix" the test.
+
 ### Existing tests are gated
 
 Adding tests is free. **Editing or deleting an existing test** goes through the step-3.6 gate: a

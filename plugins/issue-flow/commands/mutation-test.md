@@ -1,12 +1,12 @@
 ---
 description: On-demand mutation testing (mutmut / StrykerJS) over a project's critical logic — reports a mutation score and surviving mutants, never a CI gate
-argument-hint: [backend | frontend | <path-or-glob>]
+argument-hint: [backend | frontend | diff | <path-or-glob>]
 model: sonnet
 ---
 
 Run **mutation testing** on demand and report the result. Mutation testing injects deliberate logic bugs (`>`→`>=`, `and`→`or`, `return x`→`return None`, …), reruns the suite per mutant, and reports a **mutation score** = killed / total. **Surviving** mutants pinpoint logic that no assertion actually checks — they are the output that matters.
 
-This command is **manual and on-demand only**. It is deliberately **not** part of CI, the PR gate, or the TDD loop — mutation runs are slow (full suite × N mutants). It **commits nothing**, touches no workflow, and changes no source. The result is a chat report plus (for the frontend) a local HTML report. A surviving mutant is a **finding**, not a failure — the maintainer decides whether to add a test. Do **not** open a PR, edit tests, or "fix" anything from this command.
+This command is **manual and on-demand only**. The one exception is the `diff` scope below: `/issue-flow:work-on-issue` step 3.8 uses it to harden spec tests, and even there it never blocks anything. It is deliberately **not** part of CI, the PR gate, or the TDD loop — mutation runs are slow (full suite × N mutants). It **commits nothing**, touches no workflow, and changes no source. The result is a chat report plus (for the frontend) a local HTML report. A surviving mutant is a **finding**, not a failure — the maintainer decides whether to add a test. Do **not** open a PR, edit tests, or "fix" anything from this command.
 
 ## Project config — read this first
 
@@ -25,6 +25,7 @@ If neither tool is configured, tell the user mutation testing isn't set up for t
 - **`backend`** (or empty) — the backend tool over `MUTATION_BACKEND_PATHS` (its config default).
 - **`frontend`** — the frontend tool over `MUTATION_FRONTEND_GLOB` (its config default).
 - **An explicit path or glob** — narrow to one module; route to the backend tool if it looks like a backend source path, to the frontend tool if it looks like a frontend path/glob.
+- **`diff`** — only the **non-test source files this branch changed** (`git diff --name-only origin/<DEV_BRANCH>...HEAD`, minus test paths). Each file goes to the tool that owns it. Afterwards, keep only survivors on **changed lines** (the `+` side of `git diff -U0 origin/<DEV_BRANCH>...HEAD -- <file>`). Stryker can take line ranges directly (`--mutate "<file>:<start>-<end>"`). mutmut mutates whole files, so filter its `mutmut show` output by line. Report the score for the changed lines only. No changed source files → say so and stop.
 
 ## Steps
 
@@ -106,5 +107,5 @@ Mutation testing is **O(mutants × suite time)**. To keep a run usable: narrow `
 ## Forbidden
 
 - Do **not** add mutation testing to CI, the PR gate, pre-commit, or the TDD loop.
-- Do **not** commit anything, edit tests, or open a PR — read-only beyond git-ignored caches/reports.
+- Do **not** commit anything, edit tests, or open a PR — read-only beyond git-ignored caches/reports. (When `work-on-issue` step 3.8 runs the `diff` scope, the **spec author** may add tests afterwards. That is the caller's step, not this command's.)
 - Do **not** treat a non-zero `mutmut run` exit code or surviving mutants as a build failure — survivors are the deliverable, read by a human.

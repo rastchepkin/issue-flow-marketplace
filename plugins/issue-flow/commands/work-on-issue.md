@@ -4,7 +4,7 @@ argument-hint: "<issue-number> [-ask | -bypass]"
 model: opus
 ---
 
-Take issue `#$ARGUMENTS` in the current repo and drive it to completion **autonomously**: branch → TDD → PR → green CI → merge to `develop` → automatic `/report`. The issue is the single source of truth.
+Take issue `#$ARGUMENTS` in the current repo and drive it to completion **autonomously**: branch → spec tests (isolated author) → TDD → PR → green CI → merge to `develop` → automatic `/report`. The issue is the single source of truth.
 
 Before any `mcp__github__*` call, resolve `<OWNER>` and `<REPO>` from `git remote get-url origin` (format `https://github.com/<OWNER>/<REPO>.git`) — this file is template-shaped and must not hardcode a specific repo.
 
@@ -31,6 +31,7 @@ This command ships in the shared `issue-flow` plugin, so its body is stack-agnos
 - CI check to wait on → `CI_CHECK_NAME`
 - review steps → `CODE_REVIEW_SKILL` / `SECURITY_REVIEW` (skip a step whose value is `none`)
 - test-change judge → `TEST_JUDGE`, `TEST_JUDGE_MODEL`, `TEST_PROTECTED_PATHS` (step 3.6)
+- spec-driven tests → `SPEC_TESTS`, `SPEC_AUTHOR_MODEL` (steps 3.0, 3.9), `SPEC_MUTATION` (step 3.8, which also needs the `MUTATION_*` keys)
 - backlog label → `BACKLOG_LABEL` (step 1.5)
 - manual prod steps label → `PROD_ACTION_LABEL` (step 3.7; blank disables it)
 - merge strategy → `AUTO_MERGE` (step 6)
@@ -51,6 +52,7 @@ This is an **autonomous flow** in the spirit of a Replit-style agent. By default
 - request for an action outside issue scope (new DB migrations, removal of public API, CI/infra changes);
 - CI check failed for a reason that cannot be fixed by a local patch (e.g., secrets/environment);
 - **modification or deletion of existing tests judged `medium`/`high` risk**, or hitting the deny-list — gated at step 3.6. Adding new tests is always fine, no confirmation needed.
+- **a spec test (step 3.0) looks wrong to you**, or cannot be made green without contradicting another one — that is an AC/spec ambiguity, not a test problem. Never edit a spec test to get past it (see step 3).
 - **the security review flagged a security problem** (see step 5.6) — never auto-fix-and-merge a security finding; surface it to the user and stop. Only an **actual finding** is the fork: a **clean** security review is **not** a stop point — it is a pass-through, keep going to CI/merge in the same turn without pausing.
 
 In all other cases — proceed to the end without pauses.
@@ -145,7 +147,7 @@ Combine that with the report-comment signal from step 1 and re-enter at the matc
 | Observed state | Re-enter at |
 |---|---|
 | no remote branch, no PR | **step 2** below — create the branch |
-| remote branch, no PR | checkout the branch, **step 3** — finish the work |
+| remote branch, no PR | checkout the branch; **step 3.0** if the spec applies and the branch has no `test(spec):` commit yet, else **step 3** — finish the work |
 | PR **open**, no code-review comment on it | **step 5.5** |
 | PR **open**, code-review comment present | **step 5.6** (the security review always re-runs on resume — it leaves no artifact to detect, and re-running a hard gate is the safe direction) |
 | PR **merged**, no `/report` comment on the issue | **step 8** |
@@ -164,9 +166,72 @@ git checkout -b <type>/$ARGUMENTS-<kebab-summary>
 
 `<kebab-summary>` — a short 2–4 word English summary. **Never** branch from `main`, **never** work directly on `develop`/`main`.
 
+### 3.0. Spec tests — written by an isolated author, then frozen
+
+**Why.** When the agent that writes the code also writes the tests, the tests tend to confirm the code it is about to write rather than the requirement. Mutation testing does not fix this: it only measures assertions against code that exists, and is blind to requirements nobody tested. So the tests that define "done" are written **first**, by a **separate sub-agent**, from the issue's requirements, risks, edge cases and invariants, and the implementer may not change them.
+
+**When it runs.** Only if `SPEC_TESTS` is `on` (the default when the key is absent) **and** the issue body has IDs to trace: AC written as `AC-<n>:` and/or a `## Verification spec` section (`/plan-issue` writes both). Otherwise skip to step 3 and use the plain TDD loop. Docs/config/pure-refactor issues normally carry no spec.
+
+**IDs.** The traceable items are `AC-<n>`, `RISK-<n>`, `EDGE-<n>`, `INV-<n>`, as declared in the issue. An item annotated `(manual: <reason>)` is not automatable and gets no test. Every spec test carries a tag comment in the test language's comment syntax, naming the issue and one or more IDs:
+
+```
+# spec: #<N>/AC-1, #<N>/EDGE-2
+```
+
+The issue number in the tag keeps IDs from different issues apart, since every issue has its own `AC-1`.
+
+**Isolation.** Dispatch **one** sub-agent (`subagent_type=claude`, `model=<SPEC_AUTHOR_MODEL>`, default `opus`). Give it the issue (body + all comments) and the repo. Give it **nothing** of your own: no approach, no plan, no file list, not the step-1 notification. On a resume where the branch already has source changes but no spec commit, also pass `git diff --name-only origin/<DEV_BRANCH>...HEAD` and tell it not to open those files. Note in the PR body that independence was reduced.
+
+```
+Agent(subagent_type="claude", model="<SPEC_AUTHOR_MODEL>", description="Write spec tests",
+      prompt="<the prompt below>")
+```
+
+```
+You are the TEST AUTHOR for issue #<N> in this repo. A different agent will implement the change after you, and it is not allowed to edit your tests. Your tests are the definition of "done". Write them from the issue, not from a guess about the implementation.
+
+The issue (body + all comments, verbatim):
+<…>
+
+Rules:
+1. Cover every ID in the issue: AC-*, RISK-*, EDGE-*, INV-*, except items marked `(manual: …)`.
+   - AC-*: the observable behavior the criterion states.
+   - RISK-*: a test that fails if the risk materializes. Write it as the attack or the failure, not as the happy path.
+   - EDGE-*: the exact boundary: both sides of it, empty, max, duplicate, unicode, concurrent, whatever the item names.
+   - INV-*: a property that must hold across many inputs or sequences. Use the project's property-based library (Hypothesis, fast-check, …) if it is already a dependency. Otherwise use a table of adversarial cases. Do not add dependencies.
+2. Tag every test with a comment `spec: #<N>/<ID>[, #<N>/<ID>…]`. A test with no tag is not a spec test. Do not write one.
+3. Assert the specific outcome: exact values, error types, state after the call. A test that only checks "no exception", "is not None" or "called once" is not acceptable unless that IS the requirement.
+4. Test through the interface the issue names (its `Interface` list, or the modules in "Proposed solution"). Follow the existing test layout, fixtures and naming. Put spec tests in their own new test files (e.g. `test_<feature>_spec.*`), never in existing test files.
+5. Do not write or edit any non-test file. Do not create stubs of the code under test.
+6. Run the new tests. Each one must FAIL for the right reason:
+   - acceptable: the assertion fails, or the symbol is missing BECAUSE the issue declares it as new;
+   - not acceptable: syntax errors, broken fixtures, wrong import paths for code that already exists, a typo'd existing API. Fix those.
+   A test that already PASSES means the behavior already exists or the test is vacuous. Decide which. If vacuous, rewrite it. If the behavior exists (common for RISK/INV that the old code already guards), keep it as a regression guard and list it under `already_green`.
+7. If an ID is too vague to test, do not invent a meaning. List it under `unclear` with the question that would resolve it.
+8. Commit only your test files, with the subject `test(spec): #<N> <short summary>`. Do not push.
+
+Return exactly one JSON object as your final message, nothing else:
+{"commit":"<sha>","files":["<path>",…],
+ "tests":[{"id":"AC-1","test":"<file>::<name>","red_reason":"<assertion | missing new symbol `X`>"}],
+ "already_green":[{"id":"RISK-2","test":"<file>::<name>","why":"<behavior already exists>"}],
+ "unclear":[{"id":"EDGE-3","question":"<either/or question>"}]}
+```
+
+**Act on the result.**
+
+- `unclear` is non-empty → that is an AC-ambiguity fork (Mode). Stop and ask the user, one either/or question per ID, with your recommendation. Once they answer, update the issue body with the answer and re-run the author for those IDs only.
+- Otherwise check it yourself: the commit exists and touches only test files, and `TEST_CMD` on those files fails, and only in the tests it listed as red. Save the commit as `<SPEC_SHA>` and the file list as `<SPEC_FILES>`. From here on these files are **frozen** (steps 3 and 3.6).
+- Tell the user one line: `Спецификационные тесты: <k> тестов на <m> требований, заморожены (<SPEC_SHA short>).` (in `USER_LANGUAGE`).
+
 ### 3. TDD loop
 
-For each AC:
+**With spec tests (step 3.0 ran):** the Red step is already done for every traced ID. Your job is to make the spec tests green.
+
+1. **Green.** Implement until the spec tests pass. You may add **your own** tests for internals, in **other** files. Those are normal tests, not spec tests: no `spec:` tag.
+2. **Refactor.** `TEST_CMD` green again.
+3. **Never edit, delete, skip, or move a file in `<SPEC_FILES>`.** If a spec test seems wrong (it contradicts another spec test, the issue, or an existing behavior the issue does not change), stop and ask the user, as the Mode section says. Quote the test and the ID, and give the either/or choice: fix the code, or change the spec. If the spec changes, the user updates the issue, and the **author** re-runs for that ID. You never rewrite the test.
+
+**Without spec tests:** for each AC:
 
 1. **Red.** Failing test reflecting the criterion. `TEST_CMD` fails for the expected reason.
 2. **Green.** Minimal implementation. `TEST_CMD` green.
@@ -213,7 +278,15 @@ git diff <DEV_BRANCH>... --stat -- '**/test_*.py' '**/*_test.go' '**/*.test.*' '
 git diff <DEV_BRANCH>...      -- '**/test_*.py' '**/*_test.go' '**/*.test.*' '**/tests/**' '**/__tests__/**' '**/conftest.py'
 ```
 
-If it contains **only additions** — new test files, or new test cases in existing files — the gate does not engage. Commit normally and go to step 4.
+If it contains **only additions** — new test files, or new test cases in existing files — the gate does not engage, **except for the spec-lock rule below**, which is checked regardless. Spec files are additions relative to `DEV_BRANCH`, so the additions-only shortcut would miss them. Otherwise commit normally and go to step 4.
+
+**Spec-lock check** (only when step 3.0 ran):
+
+```bash
+git log --format='%h %s' <SPEC_SHA>..HEAD -- <SPEC_FILES> | grep -v ' test(spec): ' || true
+```
+
+Any output means a commit other than the spec author's touched a frozen spec file. That is a deny-list hit. The same applies to uncommitted changes to those files (`git status --porcelain -- <SPEC_FILES>`).
 
 #### 3.6a. Deny-list — always escalates to the user
 
@@ -222,7 +295,8 @@ These are cheap to detect and too expensive to get wrong, so they **never** depe
 - an **entire test file deleted**;
 - `skip` / `xfail` / `.skip` / `.only` / `t.Skip` added to a test that was previously passing;
 - a changed test file that lies **outside the modules this issue's source diff touches** — including shared fixtures, `conftest.py`, and test helpers. A test being edited far from the code being changed is the classic silent-coverage-loss shape;
-- any changed test matching `TEST_PROTECTED_PATHS` from `.claude/flow.config.md` (auth, permissions, billing, migrations — whatever this project declares untouchable).
+- any changed test matching `TEST_PROTECTED_PATHS` from `.claude/flow.config.md` (auth, permissions, billing, migrations — whatever this project declares untouchable);
+- the **spec-lock** check above produced output: a frozen spec test was changed by anyone other than the spec author. The only fix is to revert that change. If the test really is wrong, the spec has to change on the issue, which is a user decision.
 
 Any hit → force that group's risk to `high` and go straight to the user report in 3.6c, naming **which** deny-list rule fired.
 
@@ -374,6 +448,66 @@ Then add `PROD_ACTION_LABEL` to the issue (`mcp__github__issue_write(method=upda
 
 This step is **not a stop point** — the work continues. Tell the user in one line what was recorded, and if an item is also needed on the `DEV_BRANCH` environment for this merge to work there, say so explicitly: `Для dev-окружения тоже нужно: <item>.` Nothing found → no message.
 
+### 3.8. Harden the spec tests against surviving mutants (config-gated, non-blocking)
+
+**Skip unless** step 3.0 ran, `SPEC_MUTATION` is `on`, and the matching `MUTATION_BACKEND_TOOL` / `MUTATION_FRONTEND_TOOL` for the changed source is not `none`.
+
+A green spec suite can still let real bugs through. A **surviving mutant** in the code this branch changed is concrete evidence of that: a deliberate bug that no test catches. The fix belongs to the **test author**, not to you. You would write the test that fits your own code, which is the failure this whole design exists to avoid.
+
+Dispatch one sub-agent (`subagent_type=claude`, `model=<SPEC_AUTHOR_MODEL>`). Again pass no reasoning of your own, only the facts:
+
+```
+You are the TEST AUTHOR for issue #<N>, hardening the spec tests you (or an earlier author) wrote. Read-only for all non-test files.
+
+The issue (body + all comments, verbatim): <…>
+The spec test files: <SPEC_FILES>
+
+1. Run the `/issue-flow:mutation-test diff` procedure (read its command file and follow its `diff` scope), restricted to the spec tests plus the tests that cover the changed modules. Keep only survivors on lines this branch changed (`git diff origin/<DEV_BRANCH>...HEAD`).
+2. For each survivor, decide:
+   - killable: there is a requirement (an ID in the issue) that the mutated behavior violates. Add a test that kills it, tagged `spec: #<N>/<ID>`, in a spec file (a new one if needed);
+   - equivalent: the mutation does not change observable behavior. Say why in one line;
+   - spec_gap: the mutated behavior is real, but no ID in the issue requires it. Do NOT invent a requirement. Report it.
+3. One round only. Re-run the mutation on the touched files once to confirm the kills.
+4. A new test that FAILS against the current code has found a real bug. Keep it, do not weaken it, and list it under `failing`.
+5. Commit only test files, subject `test(spec): #<N> kill surviving mutants`. Do not push.
+
+Return exactly one JSON object, nothing else:
+{"commit":"<sha or null>","score_before":"<killed>/<total>","score_after":"<killed>/<total>",
+ "killed":[{"id":"RISK-1","mutant":"<file>:<line> <mutation>","test":"<file>::<name>"}],
+ "equivalent":[{"mutant":"…","why":"…"}],
+ "spec_gap":[{"mutant":"…","behavior":"<plain words>"}],
+ "failing":[{"id":"…","test":"…","what_breaks":"<plain words>"}]}
+```
+
+Act on it:
+
+- Add the commit's new files to `<SPEC_FILES>`. They are frozen too.
+- `failing` is non-empty → the **implementation** is wrong. Fix the code (never the test) until it passes, re-run the gates, and record it in the PR body.
+- `spec_gap` → do not block. List the items in the PR body's Traceability section. Either the code does something nobody asked for, or the spec is missing a requirement. The user decides later.
+- A tool error or timeout → one line in the PR body (`Mutation hardening skipped: <reason>`) and continue. This step never blocks the flow.
+
+### 3.9. Traceability check (deterministic, blocking)
+
+**Skip unless** step 3.0 ran. This check uses no model judgment. It is plain text matching, so it cannot be argued with.
+
+Write the issue body to a temp file outside the repo, then:
+
+```bash
+N=<N>
+# IDs the issue declares, minus the manual ones
+grep -E '\b(AC|RISK|EDGE|INV)-[0-9]+' issue.md | grep -v '(manual:' \
+  | grep -oE '\b(AC|RISK|EDGE|INV)-[0-9]+' | sort -u > declared.txt
+# IDs the tests claim
+git grep -hoE "spec: .*" -- <test pathspecs from step 3.6> \
+  | grep -oE "#$N/(AC|RISK|EDGE|INV)-[0-9]+" | sed "s|#$N/||" | sort -u > tagged.txt
+comm -23 declared.txt tagged.txt   # uncovered: declared but no test
+comm -13 declared.txt tagged.txt   # orphans: a tag for an ID the issue does not declare
+```
+
+- **Uncovered** IDs → re-dispatch the step-3.0 author for exactly those IDs (with the same isolation, but it may now read the code). Then repeat this check. If an ID still has no test, stop and ask.
+- **Orphans** → a test claims a requirement that does not exist. Ask the author to re-tag it or remove the tag. Do not edit it yourself.
+- Both empty → build the matrix for the PR body (step 5). For each ID: its tests (`git grep -n "#$N/<ID>"`) and their status from the last `TEST_CMD` run. Every tagged test must be green, and manual IDs are listed as `manual: <reason>`.
+
 ### 4. Commit and push
 
 Conventional-style in English (`feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`). One logically coherent commit per change, not "WIP".
@@ -414,6 +548,19 @@ Closes #$ARGUMENTS
   - `path/to/test_file.py::test_name` — deleted / rewritten / skipped. Judge: low|medium|high (<ac_fit>, <coverage>, <blast_radius>). Accepted: automatically / confirmed by user / `-bypass`. Reason: <…>
   - …
 
+## Traceability
+<only if step 3.0 ran; omit otherwise>
+Spec tests by an isolated author: `<SPEC_SHA short>` (+ hardening `<sha>` if step 3.8 committed). Frozen: not edited by the implementer.
+
+| ID | Requirement / risk (short) | Tests | Status |
+|---|---|---|---|
+| AC-1 | <…> | `path::test_name` | ✅ |
+| RISK-1 | <…> | `path::test_name`, `path::test_other` | ✅ |
+| EDGE-2 | <…> | — | manual: <reason> |
+
+Mutation (changed lines): <score_before> → <score_after>; equivalent: <n>. <or "Mutation hardening skipped: <reason>" / "not configured">
+Spec gaps (behavior no requirement covers): <list from step 3.8, or "none">
+
 ## Prod steps
 <only if step 3.7 recorded anything; omit otherwise>
 Manual steps are tracked in the issue's `## Prod checklist`; `/push-to-prod` gates the release on them.
@@ -422,6 +569,7 @@ Manual steps are tracked in the issue's `## Prod checklist`; `/push-to-prod` gat
 
 ## Checklist
 - [x] TDD: red → green → refactor completed
+- [x] Spec tests written by an isolated author, untouched by the implementer, every spec ID traced OR no spec on this issue
 - [x] All configured gates green (tests, lint, format, typecheck, e2e)
 - [x] E2E test added/updated OR noted "E2E not applicable: <reason>"
 - [x] Existing-test changes judged and recorded OR existing tests not touched
@@ -606,5 +754,7 @@ If the run instead ended at step 6a's hand-off (PR armed for auto-merge, CI stil
 - Never let the step-3.6 deny-list be relaxed by `-bypass`.
 - Never write a secret **value** into the issue, the PR, or a commit — the prod checklist names the variable and where to set it, nothing more.
 - Never pass the implementer's reasoning to the test judge — it must judge from the issue and the diffs alone.
+- Never pass your approach, plan, or file list to the spec-test author (steps 3.0, 3.8, 3.9). It works from the issue alone.
+- Never edit, delete, skip, or move a frozen spec-test file, and never author a `test(spec):` commit yourself. That subject is reserved for the spec author, and the spec-lock check trusts it.
 - Do not create files in `.claude/plans/`, `notes/` (for an active task), or `*-plan.md` at the repo root.
 - Do not use `gh` CLI for PR/issue operations — only `mcp__github__*`. The scoped exceptions are the project-board mutation (step 1.5), the code-review skill's own PR comment (step 5.5), arming auto-merge (step 6a), and creating a missing `PROD_ACTION_LABEL` (step 3.7).

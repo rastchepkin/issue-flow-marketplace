@@ -91,6 +91,18 @@
                                   deny-list rules (deleted test file, new skip/xfail, tests outside
                                   the modules the issue touches). -->
 
+## Spec-driven tests (/issue-flow:plan-issue step 4, /issue-flow:work-on-issue steps 3.0, 3.8, 3.9)
+<!-- When one agent writes both the code and its tests, the tests tend to confirm the code rather
+     than the requirement. With SPEC_TESTS: on, /plan-issue numbers the AC (AC-1…) and adds a
+     `## Verification spec` (RISK-*, EDGE-*, INV-*, Interface). /work-on-issue then has an ISOLATED
+     sub-agent write tagged tests (`spec: #N/AC-1`) from that spec before any code exists, freezes
+     them (any edit by the implementer hits the step-3.6 deny-list, which -bypass cannot relax), and
+     checks deterministically that every ID has a test. Issues without IDs use plain TDD. -->
+- SPEC_TESTS: on
+- SPEC_AUTHOR_MODEL: opus    <!-- the author defines "done"; same reasoning as the judge, so do not cheap out -->
+- SPEC_MUTATION: on          <!-- step 3.8: mutation over changed lines, and the AUTHOR adds tests that kill
+                                  survivors. Self-skips while the MUTATION_* tools below are `none`. Slow, never blocking. -->
+
 ## Reviews (set each to `none` to skip that step)
 <!-- Both run as isolated sub-agents, dispatched in parallel, each returning only its reconciled
      findings — the raw review output never reaches the main flow's context. -->
@@ -122,7 +134,7 @@
 - PLAYWRIGHT_ROLES:                    <!-- e.g. superadmin, manager, hr, employee -->
 - PLAYWRIGHT_CREDS_ENV:                <!-- NAME/prefix of the test-account credential env vars (referenced by name only) -->
 
-## Mutation testing (optional, manual-only; used by /issue-flow:mutation-test)
+## Mutation testing (optional; /issue-flow:mutation-test by hand, plus its `diff` scope from work-on-issue step 3.8 when SPEC_MUTATION is on)
 - MUTATION_BACKEND_TOOL: none          <!-- e.g. mutmut -->
 - MUTATION_BACKEND_PATHS:              <!-- e.g. backend/apps/<app>/services.py backend/apps/<app>/serializers.py -->
 - MUTATION_BACKEND_RUNNER:             <!-- optional narrower runner override -->

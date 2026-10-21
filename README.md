@@ -25,10 +25,14 @@ is never touched by updates, so there are no conflicts.
 ## The flow in one picture
 
 ```
-discussion ──/issue-flow:plan-issue──▶ GitHub Issue ──/issue-flow:work-on-issue N──▶ branch → TDD → PR (Closes #N)
-                    │                   (-backlog ⇒                           │
-             /issue-flow:ux-explore       status:backlog)          test-change judge (sub-agent)
-             for UI-shaped work                                    code + security review (2 sub-agents, parallel)
+discussion ──/issue-flow:plan-issue──▶ GitHub Issue ──/issue-flow:work-on-issue N──▶ branch → spec tests → TDD → PR (Closes #N)
+                    │                   AC-*, RISK-*,                         │
+                    │                   EDGE-*, INV-*          spec tests by an ISOLATED author, frozen;
+                    │                   (-backlog ⇒            mutation survivors → back to the author;
+                    │                    status:backlog)       every spec ID traced to a test (grep)
+             /issue-flow:ux-explore                                           │
+             for UI-shaped work                                    test-change judge (sub-agent)
+                                                                   code + security review (2 sub-agents, parallel)
                                                                               │
                                                                   green CI → merge to DEV_BRANCH
                                                                   (GitHub's auto-merge, no agent needed)
@@ -59,6 +63,11 @@ Three properties hold the flow together:
 
 - **The issue is the contract.** Everything — the plan, the AC, the test-change verdicts, the final
   report — lives on the issue and its PR, never in a local plan file.
+- **Tests are written from the requirements, not from the code.** The agent that writes the code
+  does not write the tests that define "done". An isolated author derives them from the issue's
+  numbered AC, risks, edge cases and invariants before any code exists. They are frozen, hardened
+  against surviving mutants by that same author, and traced ID by ID in the PR. Otherwise the tests
+  pass because they were shaped to fit the code.
 - **Every command is resumable.** `/work-on-issue N` inspects branch, PR, and report state and
   re-enters at the right step, so a dead or dormant session costs one re-invocation, not a restart.
 - **Nothing waits on a human that does not have to.** Low-risk test edits are judged by a sub-agent
@@ -127,6 +136,7 @@ Sub-agents get their model from the spawn, not the command frontmatter, so those
 
 | Sub-agent | Spawned by | Model | Why |
 |---|---|---|---|
+| spec-test author | `work-on-issue` 3.0, 3.8, 3.9 | opus (`SPEC_AUTHOR_MODEL`) | its tests define "done" and the implementer cannot change them |
 | test-change judge | `work-on-issue` 3.6 | opus (`TEST_JUDGE_MODEL`) | it replaces a human approval gate — the one place not to cheap out |
 | security review | `work-on-issue` 5.6 | opus | hard gate before merge; a miss ships a vulnerability |
 | code review | `work-on-issue` 5.5 | sonnet | the review skill is itself multi-agent and does the heavy lifting internally |

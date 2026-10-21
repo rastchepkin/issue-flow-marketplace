@@ -81,6 +81,8 @@ Structure (English, 5 sections):
 - `uv run ruff check .`: ✅
 - `uv run mypy --strict src`: ✅
 - AC coverage: <which AC are closed, which explicitly remain>
+- Traceability: <"no verification spec on this issue" OR copy the matrix, the mutation line and the spec gaps from the PR body's "Traceability" section verbatim. It is the durable record that each requirement, risk, edge case and invariant has a test the implementer did not write>
+  Spec gaps listed there also go under **Remaining** below: each one is either code nobody asked for or a missing requirement, and the user decides which.
 - Existing-test changes: <"none" OR list — `path/to/test_file.py::test_name` — deleted/rewritten/skipped. Judge: low|medium|high (<ac_fit>, <coverage>, <blast_radius>). Accepted: automatically / confirmed by user / `-bypass` / deny-list override. Reason: <…>>
 
   This line is the durable record of the step-3.6 gate. Auto-accepted changes are exactly the ones no human looked at, so they must be **more** visible here, not less — read them off the PR body's "Test changes" section, which `/work-on-issue` step 5 fills in.
